@@ -1,0 +1,8 @@
+# Normalise line endings on the way INTO the repo, so a checkout on Windows and
+# a checkout on Linux hold the same bytes.
+* text=auto eol=lf
+
+# Binary, or would be corrupted by any transformation.
+*.ifc  -text
+*.jpg  binary
+*.blend binary

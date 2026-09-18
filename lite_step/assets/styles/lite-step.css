@@ -1,0 +1,24 @@
+/*
+ * Drawing stylesheet — generated from the Lite-STEP material registry.
+ * Do not edit by hand; regenerate with the model.
+ *
+ * Pattern ids (url(#concrete), url(#brick), …) resolve against the drawing
+ * tool's own pattern library. No pattern artwork is shipped or copied here.
+ *
+ * Wire it up by setting BBIM_Documentation.StylesheetPath on IfcProject —
+ * lite_step emits that automatically, so opening the IFC is enough.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/* --- material family (IfcMaterial.Category) --- */
+.cut.layer-material-category-aggregate { fill: url(#earth); }
+.cut.layer-material-category-board { fill: url(#sand); }
+.cut.layer-material-category-ceramic { fill: url(#diagonal2); }
+.cut.layer-material-category-concrete { fill: url(#concrete); stroke-width: 0.5; }
+.cut.layer-material-category-glass { fill: url(#glass); }
+.cut.layer-material-category-insulation { fill: url(#crosshatch2); }
+.cut.layer-material-category-masonry { fill: url(#brick); stroke-width: 0.5; }
+.cut.layer-material-category-membrane { fill: url(#diagonal1); }
+.cut.layer-material-category-metal { fill: url(#steel); stroke-width: 0.5; }
+.cut.layer-material-category-timber { fill: url(#wood); stroke-width: 0.35; }

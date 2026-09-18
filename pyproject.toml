@@ -1,0 +1,49 @@
+# pyproject.toml — tool config only.
+#
+# This repo is not an installable package by design. Dependencies come from
+# `requirements.txt`; you work from the repo root and run `python output.py`
+# (or `python -m lite_step <file>.py`).
+
+# ---------------------------------------------------------------------------
+# pytest config so a fresh ``pytest`` invocation from the repo root
+# picks up the three test trees by default. Mirrors what ci.yml does
+# explicitly per directory.
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["lite_step/tests"]
+# Skip network-gated tests by default; override with `pytest -m network`
+# to opt back in (e.g. against the live Overture tiler). The frame-facing
+# audit is advisory (a cross-check on a heuristic, not a contract), so it is
+# opt-in too: `pytest -m facing_diagnostic`.
+addopts = ["-m", "not network and not facing_diagnostic"]
+markers = [
+    "network: tests that require network access (skipped by default)",
+    "facing_diagnostic: advisory frame-facing audit, opt-in via `-m facing_diagnostic` (not a CI gate)",
+]
+filterwarnings = [
+    # Pydantic v2 class-based ``Config`` deprecation — pre-existing in
+    # the lite_step models; not introduced by this PR. Hide it so the
+    # signal-to-noise ratio of the suite stays readable.
+    "ignore::pydantic.PydanticDeprecatedSince20",
+]
+
+# ---------------------------------------------------------------------------
+# ruff config — Lite-STEP examples and skills use ``I = lambda x: int(round(x))``
+# as a deliberate convention (short integer-rounding helper for the mm-domain
+# math that pervades the building code). The convention is documented in
+# ``agents/dsl-reference.md`` and seeded into every generated model file.
+#
+# E731 ("don't assign a lambda") is silenced *per line* with ``# noqa: E731``
+# so the convention stays visible at the call site. E741 / E743 ("ambiguous
+# name `I`") fire on the same one-letter binding and are silenced via
+# per-file-ignores in the trees where the convention applies — lite_step/,
+# tests/ keeps the strict defaults.
+# ---------------------------------------------------------------------------
+
+[tool.ruff.lint.per-file-ignores]
+# E402 ("import not at top of file") is unavoidable in examples/: the sys.path
+# bootstrap sits between the docstring and the imports precisely so
+# `import lite_step` cannot bind to another copy of the DSL.
+"examples/**" = ["E402", "E741", "E743"]
+"agents/**" = ["E741", "E743"]

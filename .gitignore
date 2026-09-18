@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Compiling a model writes its IFC beside the source — and, when drawings are
+# on, a stylesheet. The SCRIPT is tracked; its build products are not.
+output.ifc
+output.py.ifc
+styles/
+
+# Blender writes a backup beside any .blend it opens.
+*.blend1
+
+# Asset archives built from lite_step/assets/.
+/lite_step/assets/*.zip
+/lite_step/assets/*.ifczip

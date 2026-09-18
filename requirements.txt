@@ -1,0 +1,19 @@
+# Runtime dependencies for the Lite-STEP DSL and compiler.
+#
+#   pip install -r requirements.txt
+#
+# Then work from the repo root — `python output.py`, or
+# `python -m lite_step <file>.py` for anything else.
+#
+# This list is exactly what `lite_step/` imports, verified by AST scan of every
+# module. Keep it that way: a dependency the DSL does not import belongs to
+# whatever embeds it, not here.
+
+ifcopenshell>=0.8.5,<1     # IFC4X3 entity model + STEP serialisation
+libcst>=1.8,<2             # concrete-syntax rewrites of model files
+manifold3d==3.4.1          # boolean solid geometry (carves); pinned exactly —
+                           #   mesh output is version-sensitive and the corpus
+                           #   hash gate compares geometry
+numpy>=2.4,<3              # vector / matrix maths in placement + geometry
+pydantic>=2.12,<3          # the model classes and their strict validation
+shapely>=2.0,<3            # 2D profile operations
