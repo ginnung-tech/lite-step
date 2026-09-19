@@ -110,7 +110,9 @@ def compile_error(proj: Project, backend: str = "ifcopenshell") -> str:
 
 
 def open_ifc(content: str):
-    path = tempfile.mktemp(suffix=".ifc")
+    path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    path_handle.close()
+    path = path_handle.name
     try:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(content)

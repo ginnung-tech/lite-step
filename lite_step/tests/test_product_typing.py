@@ -127,7 +127,9 @@ def _manifest(ifc: str) -> dict:
     import tempfile
     import os
 
-    path = tempfile.mktemp(suffix=".ifc")
+    path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    path_handle.close()
+    path = path_handle.name
     try:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(ifc)
@@ -383,7 +385,9 @@ class TestTypeEmission:
 
         panel = Product(build_panel(), name="panel_2000")
         ifc = _compile(project_of(panel, 4), "ifcopenshell")
-        path = tempfile.mktemp(suffix=".ifc")
+        path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+        path_handle.close()
+        path = path_handle.name
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(ifc)
@@ -441,7 +445,9 @@ class TestTypeEmission:
         proj.add(wall)
         ifc = _compile(proj, "ifcopenshell")
 
-        path = tempfile.mktemp(suffix=".ifc")
+        path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+        path_handle.close()
+        path = path_handle.name
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(ifc)
