@@ -126,9 +126,9 @@ def opened(ifc: str):
     path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
     path_handle.close()
     path = path_handle.name
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(ifc)
     try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(ifc)
         return ifcopenshell.open(path)
     finally:
         try:
@@ -1155,8 +1155,8 @@ def mutated(ifc: str, mutate) -> str:
     path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
     path_handle.close()
     path = path_handle.name
-    model.write(path)
     try:
+        model.write(path)
         with open(path, encoding="utf-8") as fh:
             return fh.read()
     finally:
