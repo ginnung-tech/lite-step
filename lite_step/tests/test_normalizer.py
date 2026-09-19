@@ -583,7 +583,9 @@ def _opened(ifc_content):
     import os
     import tempfile
 
-    path = tempfile.mktemp(suffix=".ifc")
+    path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    path_handle.close()
+    path = path_handle.name
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(ifc_content)
     try:

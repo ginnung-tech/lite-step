@@ -123,7 +123,9 @@ def opened(ifc: str):
     """Parse an IFC string with ifcopenshell. Caller keeps the model alive."""
     import ifcopenshell
 
-    path = tempfile.mktemp(suffix=".ifc")
+    path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    path_handle.close()
+    path = path_handle.name
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(ifc)
     try:
@@ -1150,7 +1152,9 @@ def mutated(ifc: str, mutate) -> str:
     """
     model = opened(ifc)
     mutate(model)
-    path = tempfile.mktemp(suffix=".ifc")
+    path_handle = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
+    path_handle.close()
+    path = path_handle.name
     model.write(path)
     try:
         with open(path, encoding="utf-8") as fh:
