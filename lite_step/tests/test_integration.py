@@ -171,7 +171,7 @@ class TestGeoreferencing:
         from lite_step.models.primitives import Point
         from lite_step.models.elements import Mesh
 
-        # Copenhagen area: lat 55.67, lng 12.57 → UTM zone 33N (EPSG:32633)
+        # Copenhagen area: lat 55.67, lng 12.57 → Denmark: ETRS89 / UTM 32N (EPSG:25832)
         b = Project(
             name="Georef Test",
             site_latitude=55.67,
@@ -195,7 +195,7 @@ class TestGeoreferencing:
         crs_list = model.by_type("IfcProjectedCRS")
         assert len(crs_list) == 1
         crs = crs_list[0]
-        assert "EPSG:32633" in crs.Name
+        assert crs.Name == "EPSG:25832"
 
         # IfcMapConversion should exist with plausible UTM coordinates
         mc_list = model.by_type("IfcMapConversion")
@@ -206,7 +206,11 @@ class TestGeoreferencing:
         assert mc.OrthogonalHeight == 5.0
         assert mc.Scale == 1.0
         # UTM easting should be near 500,000 (central meridian offset)
-        assert 300_000 < mc.Eastings < 700_000
+        assert 300_000 < mc.Eastings < 800_000
+        # Redfearn EPSG:25832 reference for (55.67, 12.57), not a spherical guess
+        assert mc.Eastings == pytest.approx(724493.716, abs=0.01)
+        assert mc.Northings == pytest.approx(6175131.129, abs=0.01)
+        assert crs.GeodeticDatum == "ETRS89"
         # UTM northing for lat ~55.67 should be in the millions
         assert mc.Northings > 1_000_000
 

@@ -702,24 +702,83 @@ def _assign_body_representation(model, product, shape_rep):
     )
 
 
-def _wgs84_to_utm(lat: float, lng: float) -> tuple[float, float, int]:
-    """Convert WGS84 lat/lng to UTM easting/northing.
+def _tm_utm(lat: float, lng: float, central_meridian: float) -> tuple[float, float]:
+    """Transverse-Mercator (Redfearn series) easting/northing on GRS80/WGS84.
 
-    Uses the same spherical-Earth approximation as site_context.py mesh generation
-    for coordinate consistency. Returns (easting, northing, epsg_code).
+    UTM scale factor 0.9996, 500 km false easting, northern-hemisphere
+    northing (the 10 000 km southern false northing is the caller's job).
+    Millimetre-accurate within ~3 degrees of ``central_meridian`` and still
+    sub-centimetre at the 6 degree zone edge.
     """
     import math as _math
-    zone = int((lng + 180) / 6) + 1
-    epsg = 32600 + zone if lat >= 0 else 32700 + zone
-    R = 6_371_000.0
-    # Central meridian of the UTM zone
-    cm = zone * 6 - 183
-    easting = 500_000 + (lng - cm) * _math.radians(1) * R * _math.cos(_math.radians(lat))
-    northing = lat * _math.radians(1) * R
-    if lat >= 0:
-        northing = northing  # northern hemisphere: no offset
-    else:
-        northing = 10_000_000 + northing  # southern hemisphere: 10M false northing
+    a = 6_378_137.0
+    f = 1 / 298.257_223_563
+    k0 = 0.9996
+    e2 = 2 * f - f * f
+    ep2 = e2 / (1 - e2)
+
+    phi = _math.radians(lat)
+    lam = _math.radians(lng - central_meridian)
+    sin_phi, cos_phi, tan_phi = _math.sin(phi), _math.cos(phi), _math.tan(phi)
+
+    n_rad = a / _math.sqrt(1 - e2 * sin_phi * sin_phi)
+    t = tan_phi * tan_phi
+    c = ep2 * cos_phi * cos_phi
+    aa = lam * cos_phi
+    m = a * (
+        (1 - e2 / 4 - 3 * e2**2 / 64 - 5 * e2**3 / 256) * phi
+        - (3 * e2 / 8 + 3 * e2**2 / 32 + 45 * e2**3 / 1024) * _math.sin(2 * phi)
+        + (15 * e2**2 / 256 + 45 * e2**3 / 1024) * _math.sin(4 * phi)
+        - (35 * e2**3 / 3072) * _math.sin(6 * phi)
+    )
+    easting = 500_000 + k0 * n_rad * (
+        aa
+        + (1 - t + c) * aa**3 / 6
+        + (5 - 18 * t + t**2 + 72 * c - 58 * ep2) * aa**5 / 120
+    )
+    northing = k0 * (
+        m + n_rad * tan_phi * (
+            aa**2 / 2
+            + (5 - t + 9 * c + 4 * c**2) * aa**4 / 24
+            + (61 - 58 * t + t**2 + 600 * c - 330 * ep2) * aa**6 / 720
+        )
+    )
+    return easting, northing
+
+
+#: Denmark (incl. Bornholm) lat/lng box. Inside it the national CRS applies:
+#: ETRS89 / UTM zone 32N (EPSG:25832) for ALL of it, even east of 12 E where
+#: the longitude-derived zone would be 33 — one CRS per country is what
+#: Danish surveyors and the site pipeline (DHM, LER) use.
+_DK_LAT = (54.5, 57.8)
+_DK_LNG = (8.0, 15.3)
+
+
+def _utm_crs_for(lat: float, lng: float) -> tuple[int, int, str, str]:
+    """``(zone, epsg, datum, description)`` for a WGS84 point.
+
+    Rule: inside the Danish box -> ETRS89 / UTM 32N (EPSG:25832); elsewhere
+    the UTM zone from longitude, WGS 84 / UTM zone N (EPSG:326zz) or S (327zz).
+    """
+    if _DK_LAT[0] <= lat <= _DK_LAT[1] and _DK_LNG[0] <= lng <= _DK_LNG[1]:
+        return 32, 25832, "ETRS89", "ETRS89 / UTM zone 32N"
+    zone = min(60, max(1, int((lng + 180) // 6) + 1))
+    hemisphere = "N" if lat >= 0 else "S"
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    return zone, epsg, "WGS 84", f"WGS 84 / UTM zone {zone}{hemisphere}"
+
+
+def _wgs84_to_utm(lat: float, lng: float) -> tuple[float, float, int]:
+    """Convert WGS84 lat/lng to ``(easting, northing, epsg)`` with Redfearn TM math.
+
+    CRS rule (see ``_utm_crs_for``): Danish coordinates -> EPSG:25832, else the
+    longitude's WGS 84 UTM zone. ETRS89 and WGS84 agree to ~1 m, below the
+    precision of a site latitude/longitude.
+    """
+    zone, epsg, _datum, _desc = _utm_crs_for(lat, lng)
+    easting, northing = _tm_utm(lat, lng, zone * 6 - 183)
+    if lat < 0:
+        northing += 10_000_000  # southern hemisphere false northing
     return easting, northing, epsg
 
 
@@ -727,7 +786,8 @@ def _add_georeferencing(model, proj: Project) -> None:
     """Add IfcMapConversion + IfcProjectedCRS to place the model in real-world coordinates.
 
     Maps the local origin (0,0,0) to UTM coordinates derived from the proj's
-    WGS84 site_latitude/site_longitude. The UTM zone is auto-detected from longitude.
+    WGS84 site_latitude/site_longitude. The CRS follows ``_utm_crs_for``: EPSG:25832
+    for Denmark, otherwise the UTM zone of the longitude.
     """
     import math as _math
 
@@ -745,13 +805,12 @@ def _add_georeferencing(model, proj: Project) -> None:
     x_ordinate = _math.sin(_math.radians(true_north))
 
     # Create IfcProjectedCRS — names the coordinate reference system
-    zone = int((lng + 180) / 6) + 1
-    hemisphere = "N" if lat >= 0 else "S"
+    zone, _epsg, datum, description = _utm_crs_for(lat, lng)
     crs = model.create_entity(
         "IfcProjectedCRS",
         Name=f"EPSG:{epsg}",
-        Description=f"WGS 84 / UTM zone {zone}{hemisphere}",
-        GeodeticDatum="WGS 84",
+        Description=description,
+        GeodeticDatum=datum,
         MapProjection="Transverse Mercator",
         MapZone=str(zone),
     )
