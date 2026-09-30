@@ -1317,6 +1317,30 @@ def _iter_identity_elements(elem):
         yield from _iter_identity_elements(child)
 
 
+def _iter_identity_sites(top, scope: str):
+    """Yield ``(canonical, site_label)`` for every identity-bearing thing under ``top``.
+
+    Everything :func:`_iter_identity_elements` yields, PLUS each named
+    ``.void()`` hole. A named void is not an element — its tool operand is
+    consumed — but it emits an ``IfcOpeningElement`` whose ``Name`` and
+    uuid5 GlobalId both derive from ``_void_canonical``, so two holes sharing
+    one are a silent GlobalId collision and an ambiguous patch-mode target.
+    ``_iter_identity_elements`` deliberately stays ``_voids``-free (other
+    callers must not visit operands); the void scan lives here instead.
+    Anonymous elements and voids (canonical ``None``) are skipped.
+    """
+    for elem in _iter_identity_elements(top):
+        if elem.ifc_name:
+            yield elem.ifc_name, f"{scope}/{type(elem).__name__}(id={elem.id})"
+        for operand in (getattr(elem, "_voids", None) or []):
+            canonical = getattr(operand, "_void_canonical", None)
+            if canonical:
+                yield canonical, (
+                    f"{scope}/{type(elem).__name__}(id={elem.id})"
+                    f".void(name={getattr(operand, '_void_leaf', None)!r})"
+                )
+
+
 def _iter_storey_identity_elements(storey):
     """Every product-capable element in ``storey`` — tops AND their descendants.
 
@@ -2003,11 +2027,7 @@ def validate_project_report(project: Project) -> ValidationReport:
     for storey in project.storeys:
         storey_name = storey.name or storey.elevation
         for top in storey.elements:
-            for elem in _iter_identity_elements(top):
-                canonical = elem.ifc_name  # stamped _canonical_name; None if anon
-                if not canonical:
-                    continue
-                site = f"{storey_name}/{type(elem).__name__}(id={elem.id})"
+            for canonical, site in _iter_identity_sites(top, str(storey_name)):
                 if canonical in seen_canonical:
                     errors.append(
                         f"Duplicate canonical name '{canonical}': two elements "
@@ -2024,11 +2044,7 @@ def validate_project_report(project: Project) -> ValidationReport:
     # DSL Site containers live in ``project.sites`` (P2), not storeys — feed
     # their canonical names into the same per-scope uniqueness check.
     for site_container in getattr(project, "sites", []):
-        for elem in _iter_identity_elements(site_container):
-            canonical = elem.ifc_name
-            if not canonical:
-                continue
-            site = f"site/{type(elem).__name__}(id={elem.id})"
+        for canonical, site in _iter_identity_sites(site_container, "site"):
             if canonical in seen_canonical:
                 errors.append(
                     f"Duplicate canonical name '{canonical}': two elements "
