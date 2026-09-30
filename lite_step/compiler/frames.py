@@ -982,6 +982,38 @@ def opening_body_thickness(body, divisor: float = 1.0):
     return None
 
 
+def host_opening_frame(host, snap=None, divisor: float = 1.0
+                       ) -> Optional[OpeningFrame]:
+    """The opening frame of a HOST — the solid, its container, or a body-less container.
+
+    The ONE answer to "where do this host's openings sit", for every consumer
+    that starts from whatever an opening's ``.parent`` points at (the query
+    layer's ``--q``/``--check``, the space-boundary pass):
+
+    * the host IS a ``Box``/``Extrude`` (``body.opening(...)``) -> its own frame;
+    * the host is a container with a ``Box``/``Extrude`` child (a bodied Wall)
+      -> that body's frame;
+    * the host is a container with NO such child — a body-less Wall that only
+      aggregates leaf walls (#731/#742) — -> the frame of its aggregated
+      bounds, :func:`opening_container_aabb`, exactly what the emitter reads.
+
+    Reading ``_body_of`` alone answered ``None`` for the third case, so the
+    query surface claimed "compiling would reject the same model" and the
+    space-boundary pass dropped the window's boundary, while the compiler
+    emitted the window correctly. A container that HAS a body whose own frame
+    fails does not fall back to its bounds: that failure is the validator's
+    refusal, and falling through would hide it.
+    """
+    from lite_step.models import taxonomy as tx
+
+    if tx.is_prism(host):
+        return opening_host_frame(host, snap=snap, divisor=divisor)
+    for child in (getattr(host, "_elements", None) or []):
+        if tx.is_prism(child):
+            return opening_host_frame(child, snap=snap, divisor=divisor)
+    return opening_host_frame(host, snap=snap, divisor=divisor)
+
+
 def opening_host_frame(body, snap=None, divisor: float = 1.0
                        ) -> Optional[OpeningFrame]:
     """THE opening frame of a voidable body — box, contour or container.

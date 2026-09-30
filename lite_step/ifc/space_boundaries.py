@@ -642,9 +642,7 @@ def _openings_of(host, host_name: str,
     if not any(tx.brings_void(c) for c in children):
         return out
 
-    body = frames._body_of(host)
-    frame = (frames.opening_host_frame(body, divisor=MM_PER_METER)
-             if body is not None else None)
+    frame = frames.host_opening_frame(host, divisor=MM_PER_METER)
     if frame is None:
         logger.warning(
             "space boundary: %s holds openings but bears no opening frame, "
