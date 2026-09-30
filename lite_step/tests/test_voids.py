@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import pytest
 
-from lite_step.compiler.executor import execute_lite_step_script
+from lite_step.compiler.executor import execute_lite_step_script, validate_project
 from lite_step.ifc.generator import generate_ifc
 from lite_step.models import Project, Box, Point, collect_consumed_operand_ids
 from lite_step.models.project import Storey
@@ -832,3 +832,65 @@ def test_displacement_reads_the_predicate_instead_of_restating_it():
     assert restated is None, (
         "displacement.py restates the container routing table:\n"
         + (restated.group(0) if restated else ""))
+
+
+# ── named-void identity ─────────────────────────────────────
+#
+# A named void emits an IfcOpeningElement whose Name and uuid5 GlobalId derive
+# from its canonical. Two holes on one host sharing a leaf share a canonical —
+# a silent GlobalId collision — so the per-scope uniqueness scan must see them.
+
+_TWO_DOORWAYS_ONE_HOST = """
+from lite_step.models import Project, Wall, Box, Point
+def generate_project():
+    b = Project(name="dup")
+    wall = Wall(name="north")
+    wall.add(Box(name="body", start=Point(x=-3000, y=-150, z=0),
+                 end=Point(x=3000, y=150, z=3000), material="Concrete"))
+    wall.void(Box(start=Point(x=-2500, y=-200, z=0),
+                  end=Point(x=-1500, y=200, z=2100)), name="doorway")
+    wall.void(Box(start=Point(x=1500, y=-200, z=0),
+                  end=Point(x=2500, y=200, z=2100)), name="doorway")
+    b.add(wall)
+    return b
+result = generate_project()
+"""
+
+_DOORWAY_PER_HOST = """
+from lite_step.models import Project, Wall, Box, Point
+def generate_project():
+    b = Project(name="ok")
+    for leaf, y in (("north", 0), ("south", 5000)):
+        wall = Wall(name=leaf)
+        wall.add(Box(name="body", start=Point(x=-3000, y=y - 150, z=0),
+                     end=Point(x=3000, y=y + 150, z=3000), material="Concrete"))
+        wall.void(Box(start=Point(x=-500, y=y - 200, z=0),
+                      end=Point(x=500, y=y + 200, z=2100)), name="doorway")
+        b.add(wall)
+    return b
+result = generate_project()
+"""
+
+
+def test_two_named_voids_with_one_leaf_on_one_host_fail_naming_both():
+    r = execute_lite_step_script(_TWO_DOORWAYS_ONE_HOST)
+    assert r.success, r.error            # authoring is fine; COMPILE validation refuses
+    err = " | ".join(validate_project(r.project))
+    assert "Duplicate canonical name 'opening:doorway:wall:north'" in err
+    assert err.count(".void(name='doorway')") == 2   # BOTH sites named
+
+
+def test_the_same_void_leaf_on_two_different_hosts_compiles():
+    model = _compile(_DOORWAY_PER_HOST)
+    names = sorted(o.Name for o in model.by_type("IfcOpeningElement"))
+    assert names == ["opening:doorway:wall:north", "opening:doorway:wall:south"]
+    # distinct canonicals -> distinct GlobalIds
+    ids = [o.GlobalId for o in model.by_type("IfcOpeningElement")]
+    assert len(set(ids)) == 2
+
+
+def test_two_anonymous_voids_on_one_host_still_compile():
+    """Anonymous holes carry no identity, so they cannot collide."""
+    script = _TWO_DOORWAYS_ONE_HOST.replace(', name="doorway"', '')
+    model = _compile(script)
+    assert len(model.by_type("IfcOpeningElement")) == 2
