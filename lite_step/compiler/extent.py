@@ -819,9 +819,11 @@ def element_extent(elem, divisor: float = 1.0, _on_path=None) -> Optional[Aabb]:
 
     Boolean operands are not included. ``.difference()`` REMOVES material, so
     counting a cutter would enlarge the host by the very volume being taken
-    out of it; ``.union()`` operands genuinely add, and are a documented gap
-    rather than an oversight (they are also unreachable from ``.parent``, so
-    the two limits agree).
+    out of it. ``.union()`` operands genuinely ADD material, so each one's own
+    extent (same ``divisor``, same cycle guard, recursively including ITS
+    unions) is unioned into the host's. Dropping them made ``authored_aabb()``
+    of ``box.union(rounded_tip)`` stop at the box, and anything derived from it
+    (reinforcement layout, cover axis) silently skipped the tip.
 
     ``divisor`` states the caller's unit domain and is threaded down every
     branch — see the module docstring. ``authored_aabb``/``world_aabb`` leave
@@ -870,7 +872,19 @@ def element_extent(elem, divisor: float = 1.0, _on_path=None) -> Optional[Aabb]:
 
 
 def _element_extent_inner(elem, divisor: float, _on_path) -> Optional[Aabb]:
-    """The body of :func:`element_extent`, past its cycle guard."""
+    """The body of :func:`element_extent`, past its cycle guard.
+
+    The element's own extent, unioned with every ``.union()`` operand's.
+    """
+    own = _own_extent(elem, divisor, _on_path)
+    adds = getattr(elem, "_adds", None) or []
+    if not adds:
+        return own
+    return _union([own, *(element_extent(a, divisor, _on_path) for a in adds)])
+
+
+def _own_extent(elem, divisor: float, _on_path) -> Optional[Aabb]:
+    """The per-KIND rule of :func:`element_extent`, before ``.union()`` operands."""
     from lite_step.models import taxonomy as tx
 
     if tx.is_opening(elem):
@@ -964,6 +978,8 @@ def extent_is_exact(elem) -> bool:
     from lite_step.models import taxonomy as tx
 
     tname = type(elem).__name__
+    if any(not extent_is_exact(a) for a in (getattr(elem, "_adds", None) or [])):
+        return False      # a union is only as exact as its loosest operand
     if tname in _INEXACT_REASON:
         return False
     if tname == "Sweep":
@@ -989,6 +1005,10 @@ def inexact_reason(elem) -> Optional[str]:
     tname = type(elem).__name__
     if tname in _INEXACT_REASON:
         return _INEXACT_REASON[tname]
+    for operand in (getattr(elem, "_adds", None) or []):
+        reason = inexact_reason(operand)
+        if reason:
+            return f"{type(operand).__name__} .union() operand: {reason}"
     if tname == "Sweep":
         if not getattr(elem, "profile", None):
             return ("the section comes from Material(profile_mm=): the AABB "

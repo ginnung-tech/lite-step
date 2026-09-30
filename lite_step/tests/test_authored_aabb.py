@@ -787,3 +787,89 @@ class TestExtentMemo:
                 "this test is obsolete, but so is the reason the memo is "
                 "scoped; re-read memoized_extents() before widening it")
         assert element_extent(wall) != before, "outside the block it re-reads"
+
+
+# ── .union() operands add material, so they add extent ──────────────────────
+#
+# Every hospital floorplate is ``Box.union(Revolve)`` — a straight run fused to
+# a rounded tip. ``authored_aabb()`` used to answer the LEFT operand only, and
+# the reinforcement layout derived from it stopped short of the tip.
+
+def _fingertip():
+    box = Box(name="b", material="Concrete_C30-37",
+              start=Point(x=0, y=-12000, z=0), end=Point(x=48000, y=12000, z=275))
+    rev = Revolve(name="t", angle=36000,
+                  profile=[Point2D(x=0, y=0), Point2D(x=12000, y=0),
+                           Point2D(x=12000, y=275), Point2D(x=0, y=275)],
+                  path=[Point(x=48000, y=0, z=0), Point(x=48000, y=0, z=275)],
+                  material=Material(key="Concrete_C30-37"))
+    return box, rev
+
+
+def test_union_extent_includes_the_right_operand():
+    box, rev = _fingertip()
+    assert (box.authored_aabb().min.x, box.authored_aabb().max.x) == (0, 48000)
+    fused = box.union(rev)
+    b = fused.authored_aabb()
+    assert (b.min.x, b.max.x) == (0, 60000)      # was 0..48000
+
+
+def test_union_extent_is_recursive():
+    box, rev = _fingertip()
+    far = Box(name="far", start=Point(x=70000, y=0, z=0),
+              end=Point(x=71000, y=100, z=100))
+    rev.union(far)                               # union of a union operand
+    box.union(rev)
+    assert box.authored_aabb().max.x == 71000
+
+
+def test_union_extent_inexactness_follows_the_operand():
+    """A Revolve bound is loose; a Box union must not claim to be exact."""
+    box, rev = _fingertip()
+    assert extent_is_exact(box) is True
+    box.union(rev)
+    assert extent_is_exact(box) is False
+    assert "Revolve .union() operand" in inexact_reason(box)
+
+
+def test_difference_operand_still_never_enlarges_the_host():
+    box, _ = _fingertip()
+    cutter = Box(name="c", start=Point(x=90000, y=0, z=0),
+                 end=Point(x=91000, y=100, z=100))
+    box.difference(cutter)
+    assert box.authored_aabb().max.x == 48000
+
+
+def test_build_reinforcement_covers_the_unioned_tip():
+    """The real consumer: the rebar layout spans the whole capsule, tip included."""
+    # Only the reinforcement helpers are lifted from the fixture: importing the
+    # whole module registers its custom materials globally, which would leak
+    # into the material-registry tests that run after this file.
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).parent / "fixtures" / "inverted_roof_building.py").read_text(encoding="utf-8")
+    wanted = {"REBAR_COVER", "REBAR_PITCH_MAX", "REBAR_DIAMETER", "_AXIS", "I",
+              "_bar_positions", "build_reinforcement"}
+    picked = []
+    for node in ast.parse(src).body:
+        names = ({node.name} if isinstance(node, ast.FunctionDef)
+                 else {t.id for t in getattr(node, "targets", []) if isinstance(t, ast.Name)})
+        if names & wanted:
+            picked.append(node)
+    assert {n.name for n in picked if isinstance(n, ast.FunctionDef)} >= {"build_reinforcement"}
+    ns = {"Bar": Bar, "Point": Point, "I": lambda x: int(round(x))}
+    exec(compile(ast.Module(body=picked, type_ignores=[]), "reinforcement", "exec"), ns)
+
+    class _M:  # the fixture's namespace, used like the module was
+        pass
+    module = _M()
+    module.build_reinforcement = ns["build_reinforcement"]
+    module.REBAR_COVER = ns["REBAR_COVER"]
+
+    box, rev = _fingertip()
+    slab = box.union(rev)
+    bars = module.build_reinforcement(slab)
+    far_end = max(p.x for bar in bars for p in bar.path)
+    # x-running bars stop one cover short of the 60000 tip, not of the 48000 box
+    assert far_end == 60000 - module.REBAR_COVER
