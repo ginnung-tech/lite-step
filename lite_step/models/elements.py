@@ -2008,30 +2008,6 @@ def _opening_ancestor(elem):
     return None
 
 
-def _opening_host_body(opening):
-    """The solid whose frame an opening is placed in, or ``None``.
-
-    ``body.opening(win, …)`` stamps the BODY as the parent, so the host is
-    already the solid. ``wall.anchor(win, …)`` stamps the container, whose
-    body is its first ``Box``/``Extrude`` child — the same "first prism
-    child" rule ``generator._create_wall`` uses to pick the body it derives
-    the opening frame from, and the reason a container cannot be passed to
-    ``frames.opening_host_frame`` directly (that reads ``start``/``end`` and
-    would answer ``None`` for a Wall).
-    """
-    from lite_step.models import taxonomy as tx
-
-    host = getattr(opening, "_parent", None)
-    if host is None:
-        return None
-    if tx.is_prism(host):
-        return host
-    for child in (getattr(host, "_elements", None) or []):
-        if tx.is_prism(child):
-            return child
-    return None
-
-
 def _opening_child_matrix(opening):
     """4x4 opening-local -> authoring-space matrix for ``opening``'s children.
 
@@ -2060,19 +2036,21 @@ def _opening_child_matrix(opening):
     from lite_step.models.bounds import BoundsError
 
     label = opening._canonical_name or opening.name or opening.id
-    body = _opening_host_body(opening)
+    host = getattr(opening, "_parent", None)
     frame = None
-    if body is not None:
+    if host is not None:
         # Authoring millimetres here, so no snapper and no mm->m divisor —
         # the shared derivation is unit-agnostic and each caller states its
-        # own units.
-        frame = frames.opening_host_frame(body, snap=None, divisor=1.0)
+        # own units. ``host_opening_frame`` resolves solid / bodied container
+        # / body-less container, the same three routes the emitter takes.
+        frame = frames.host_opening_frame(host, snap=None, divisor=1.0)
     if frame is None:
         raise BoundsError(
             f"{type(opening).__name__} '{label}' has no usable host frame, so "
             f"nothing inside it has a world position yet — an opening is "
             f"placed by its host, and that host needs a box body (start=/"
-            f"end=) or a vertical planar contour body with a thickness. "
+            f"end=) or a vertical planar contour body with a thickness, or "
+            f"aggregated children to derive one from. "
             f"Fix the host body and the query answers; compiling would "
             f"reject the same model."
         )
