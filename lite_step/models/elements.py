@@ -3064,15 +3064,15 @@ class Box(BimElement):
     Axis-aligned box primitive (DSL v8).
 
     Two opposite corner points define the box; corners auto-normalize
-    (any opposite pair is accepted). Supports sequential rotations about
-    the box center for authoring convenience.
+    (any opposite pair is accepted). A Box is always axis-aligned: to rotate
+    one, place it with ``placement=Transform(origin=..., rotations=[...])``.
+    ``Box(rotations=...)`` was removed (DSL v19) and is a hard error.
 
     IFC mapping: IfcExtrudedAreaSolid.
 
     Parameters:
         start: First corner point (mm, integers)
         end: Opposite corner point (mm, integers)
-        rotations: Sequential (axis, angle_centidegrees) tuples
         type: Semantic type for coloring/IFC routing
         color: Optional color override ("foundation", "wall", "slab", ...)
 
@@ -3097,8 +3097,24 @@ class Box(BimElement):
     start: Optional[Point] = None
     end: Optional[Point] = None
     type: str = ""  # "site", "foundation", "ceiling", "wall", "wall-opening", "roof", "sketch"
-    rotations: List[Tuple[str, int]] = Field(default_factory=list)
     color: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _reject_removed_rotations(cls, data):
+        """``Box(rotations=)`` is gone: it was accepted, drew a rotated solid,
+        and yet every bounds/extent query ignored it. A hard error names the
+        one remaining rotation path."""
+        if isinstance(data, dict) and "rotations" in data:
+            raise ValueError(
+                f"Box(rotations={data['rotations']!r}) was removed: a Box is "
+                "axis-aligned and bounds queries (world_aabb) never saw the "
+                "rotation. Rotate it with placement=Transform(origin=Point(...), "
+                f"rotations={data['rotations']!r}) instead. Note Transform "
+                "rotates about the element's LOCAL ORIGIN, not the box centre: "
+                "author the box centred on (0, 0, 0) and put the centre in origin=."
+            )
+        return data
 
     @model_validator(mode='after')
     def validate_box(self):

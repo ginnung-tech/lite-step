@@ -98,7 +98,7 @@ If a constructor is not here, it does not exist.
 
 # --- primitives ---
 Point(x=0, y=0, z=0)                          Point2D(x=0, y=0)
-Box(start: Point, end: Point, rotations=[(axis, centideg)], material=, color=, type=)
+Box(start: Point, end: Point, material=, color=, type=)   # always axis-aligned; rotate via placement=Transform(...). Box(rotations=) is a hard error
 Extrude(contour: list[Point], thickness: int, material=, color=, type=)
 # Sweep/Revolve profiles are LOCAL cross-sections about the path — never world coords:
 Sweep(profile: list[Point2D], path: list[Point], fillet_radius=0, profile_rotation=0, material=, color=)
@@ -251,11 +251,9 @@ Both in-plane axes flip together: a detail authored once mounts on every facade,
 `along=0` is the corner on your LEFT facing the outer face — name ends `_left`/`_right`, never `_south`.
 Anchor whole assemblies: a sub-assembly authored around its own origin resolves recursively in the host's frame, outside the carve pass.
 
-**Two rotation kwargs, two different centres.**
-`Transform(rotations=)` rotates about the element's LOCAL ORIGIN `(0, 0, 0)`.
-`Box(rotations=)` rotates about the box's own CENTRE.
+**One rotation path: `placement=Transform(origin=, rotations=)`.** It rotates about the element's LOCAL ORIGIN `(0, 0, 0)`, so to spin a box about its own centre author it centred on the origin and put the centre in `origin=`. `Box(rotations=)` no longer exists (a hard error pointing here): it was accepted but `world_aabb()` ignored it.
 A `.difference()` operand or a `.clip()` plane on a rotated `Box` is read in the box's UNROTATED frame: author the cutter where the box was drawn, not where it ends up.
-Both lists compose left-to-right as an INTRINSIC sequence: each rotation is about the already-rotated axes.
+The list composes left-to-right as an INTRINSIC sequence: each rotation is about the already-rotated axes.
 
 **Default massing — a CONVENTION, not a rule: nothing raises if you turn the building.**
 Run the long axis along X, face the entrance facade south (`−Y`), and the gable ends land at `±X`; `examples/08_murermestervilla.py` is authored this way. It is worth keeping because a brief's words are read against it: "the south facade", "the gable window", "the east elevation" each resolve to one wall only while the massing sits where the vocabulary expects. Turn it and nothing fails — the model just stops answering the brief that describes it.

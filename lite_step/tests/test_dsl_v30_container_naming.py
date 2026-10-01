@@ -95,14 +95,14 @@ def test_v21_base_refused_on_continuation(monkeypatch, tmp_path):
     assert result.needs_llm is False
 
 
-def test_current_meta_is_18():
+def test_current_meta_is_19():
     """The version this compiler writes, pinned.
 
     A stale number here is not cosmetic: it is what every stored base is
     compared against, so a bump that lands without this assertion moving
     means the gate is comparing against the wrong thing.
     """
-    assert emb_version() == "18"
+    assert emb_version() == "19"
 
 
 def emb_version():

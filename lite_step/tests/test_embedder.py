@@ -150,7 +150,7 @@ class TestEmbedExtract:
         meta = extract_litestep_meta(ifc_content)
 
         assert meta is not None
-        assert meta.version == "18"  # .no_carve() deleted
+        assert meta.version == "19"  # Box(rotations=) deleted
 
     def test_no_meta_returns_none(self):
         model, _ = _create_minimal_ifc_model()

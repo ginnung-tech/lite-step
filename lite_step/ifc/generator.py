@@ -58,7 +58,6 @@ from lite_step.ifc.entity_cache import EntityCache, snap_to_precision
 from lite_step.ifc.schema_version import IFC_OUTPUT_SCHEMA
 from lite_step.ifc.geometry import (
     dsl_to_ifc_point as _dsl_to_ifc_point,
-    axis_rotation_matrix_3x3 as _axis_rotation_matrix_3x3,
     extend_cut_for_boolean as _extend_cut_for_boolean,
     newell_normal as _newell_normal,
     apply_orientation_rules as _apply_orientation_rules,
@@ -5083,9 +5082,6 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
     The hole is defined in DSL coordinates relative to the parent's min corner.
     We transform it to be relative to the parent's center (for rotation).
 
-    Supports operand rotations - if the operand has rotations, the solid is created
-    with IfcAxis2Placement3D that includes the rotation directly.
-
     v1.5 (WS1 PR-E): Revolve operands become IfcRevolvedAreaSolid, Pipe/Bar
     operands become IfcSweptDiskSolid — all positioned in the same
     parent-center-relative frame.
@@ -5095,7 +5091,7 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
 
     Args:
         model: ifcopenshell model
-        hole: BimElement model with start/end coordinates in DSL space (may have rotations)
+        hole: BimElement model with start/end coordinates in DSL space
         parent_min: (x, y, z) of parent's minimum corner in IFC coordinates
         parent_center: (x, y, z) of parent's center in IFC coordinates
         cache: EntityCache for deduplication
@@ -5104,7 +5100,6 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
         A solid operand positioned relative to parent center, or None (with
         a warning) if the operand shape is unsupported.
     """
-    import math
 
     # v1.5 primitives as operands (WS1 PR-E). Their geometry is authored in
     # world coords; shift by -parent_center into the parent's local frame.
@@ -5185,129 +5180,26 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
         (min_pt[2] + max_pt[2]) / 2.0 - parent_center[2]
     )
 
-    # Check if hole has rotations
-    rotations = getattr(hole, 'rotations', []) or []
+    # Box has no rotations= (removed); rotation is placement=Transform(...)
+    # No rotation - simple placement
+    # Create profile (cached)
+    profile = cache.get_or_create_rect_profile(x_dim=width, y_dim=depth)
 
-    if not rotations:
-        # No rotation - simple placement
-        # Create profile (cached)
-        profile = cache.get_or_create_rect_profile(x_dim=width, y_dim=depth)
-
-        origin = cache.get_or_create_point(
-            [hole_center[0], hole_center[1], hole_center[2] - height / 2.0]
-        )
-        placement = model.create_entity("IfcAxis2Placement3D", Location=origin)
-
-        extrusion_dir = cache.get_z_up_direction()
-
-        solid = model.create_entity(
-            "IfcExtrudedAreaSolid",
-            SweptArea=profile,
-            Position=placement,
-            ExtrudedDirection=extrusion_dir,
-            Depth=height
-        )
-        return solid
-
-    # Has rotations - use IfcHalfSpaceSolid for "sky void" type cuts
-    # This is much simpler and more reliable for boolean operations
-    assert np is not None  # numpy available when IFC_AVAILABLE is True
-
-    # Build rotation matrix from sequential rotations
-    # DSL and IFC both use Z-up — direct axis mapping (identity)
-    rotation_matrix = np.eye(3, dtype=np.float64)
-    for axis, angle_centideg in rotations:
-        ifc_axis = axis.lower()
-        angle_sign = 1.0
-
-        angle_rad = math.radians(angle_centideg / 100.0) * angle_sign
-        rot = _axis_rotation_matrix_3x3(ifc_axis, angle_rad)
-        rotation_matrix = rotation_matrix @ rot
-
-    # For sky void cutters, use IfcHalfSpaceSolid which is a semi-infinite solid
-    # bounded by a plane. This is much more reliable for boolean operations.
-    #
-    # The plane is defined by:
-    # - A point on the plane (the bottom center of what would be the box)
-    # - A normal direction (perpendicular to the plane surface)
-
-    # The plane normal is the Z-axis after rotation (pointing "up" in rotated space)
-    plane_normal = np.array([
-        rotation_matrix[0, 2],
-        rotation_matrix[1, 2],
-        rotation_matrix[2, 2]
-    ])
-
-    # Determine cutting direction based on hole type:
-    # - "sky_cutter" or "sky" holes: cut ABOVE the plane (remove sky)
-    # - "dirt_top_cutter" or "bottom" holes: cut BELOW the plane (remove ground)
-    #
-    # For grass cap to work as a thin layer between two planes:
-    # - sky_void cuts above → keeps below
-    # - dirt_top_void cuts below → keeps above
-    # Result: the intersection (thin layer between planes)
-    hole_id = getattr(hole, 'id', '') or ''
-    cut_below = 'dirt_top' in hole_id or 'bottom' in hole_id or 'lower' in hole_id
-
-    # Position on the plane: start from hole_center, move down by half height in rotated Z direction
-    plane_point = np.array([
-        hole_center[0] - plane_normal[0] * height / 2.0,
-        hole_center[1] - plane_normal[1] * height / 2.0,
-        hole_center[2] - plane_normal[2] * height / 2.0
-    ])
-
-    # Create the plane surface
-    plane_location = model.create_entity(
-        "IfcCartesianPoint",
-        Coordinates=(float(plane_point[0]), float(plane_point[1]), float(plane_point[2]))
+    origin = cache.get_or_create_point(
+        [hole_center[0], hole_center[1], hole_center[2] - height / 2.0]
     )
+    placement = model.create_entity("IfcAxis2Placement3D", Location=origin)
 
-    # For cutting below, we flip the normal direction so the half-space
-    # extends downward instead of upward
-    if cut_below:
-        final_normal = -plane_normal
-    else:
-        final_normal = plane_normal
+    extrusion_dir = cache.get_z_up_direction()
 
-    # Normal direction - points into the half-space to remove
-    plane_axis = model.create_entity(
-        "IfcDirection",
-        DirectionRatios=(float(final_normal[0]), float(final_normal[1]), float(final_normal[2]))
+    solid = model.create_entity(
+        "IfcExtrudedAreaSolid",
+        SweptArea=profile,
+        Position=placement,
+        ExtrudedDirection=extrusion_dir,
+        Depth=height
     )
-
-    # Reference direction (X-axis of plane) - use first column of rotation matrix
-    plane_ref = model.create_entity(
-        "IfcDirection",
-        DirectionRatios=(
-            float(rotation_matrix[0, 0]),
-            float(rotation_matrix[1, 0]),
-            float(rotation_matrix[2, 0])
-        )
-    )
-
-    plane_placement = model.create_entity(
-        "IfcAxis2Placement3D",
-        Location=plane_location,
-        Axis=plane_axis,
-        RefDirection=plane_ref
-    )
-
-    plane_surface = model.create_entity(
-        "IfcPlane",
-        Position=plane_placement
-    )
-
-    # Create IfcHalfSpaceSolid
-    # AgreementFlag=True means the solid is in the direction of the surface normal
-    # With the normal pointing in the direction we want to remove,
-    # DIFFERENCE will subtract that half-space from the base solid
-    half_space = model.create_entity(
-        "IfcHalfSpaceSolid",
-        BaseSurface=plane_surface,
-        AgreementFlag=True
-    )
-
-    return half_space
+    return solid
 
 
 def _create_body_representation(model, context, solid):
@@ -5737,18 +5629,15 @@ def _create_box(model, context, elem: 'Box', cache: EntityCache):
     Create IfcBuildingElementProxy with box geometry for a Box primitive.
 
     Supports:
-    - Sequential rotations around the box center
     - Boolean _cuts (DIFFERENCE) and _adds (UNION) via PrivateAttr
     - type-based automatic coloring
 
     DSL convention (Z-up):
     - start/end define opposite corners of base box
-    - rotations: List of (axis, angle_centidegrees) tuples
     - _cuts: List of Solid elements for boolean cuts
     - _adds: List of Solid elements for boolean adds
     - type: Determines color ("site", "wall", "roof", etc.)
     """
-    import math
     assert run is not None
     assert np is not None
 
@@ -5820,17 +5709,8 @@ def _create_box(model, context, elem: 'Box', cache: EntityCache):
     # interpreted in the box's UNROTATED local frame).
     result_solid = _apply_clips(model, result_solid, elem._clips, center=center)
 
-    # Build rotation matrix from sequential rotations
-    # DSL and IFC both use Z-up — direct axis mapping (identity)
+    # A Box is axis-aligned; rotation is placement=Transform(...), applied by the placement engine.
     rotation_matrix = np.eye(3, dtype=np.float64)
-    rotations = elem.rotations if elem.rotations else []
-    for axis, angle_centideg in rotations:
-        ifc_axis = axis.lower()
-        angle_sign = 1.0
-
-        angle_rad = math.radians(angle_centideg / 100.0) * angle_sign
-        rot = _axis_rotation_matrix_3x3(ifc_axis, angle_rad)
-        rotation_matrix = rotation_matrix @ rot
 
     # Build 4x4 transformation matrix: rotation + translation to center
     matrix = np.array([

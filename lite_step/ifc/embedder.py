@@ -95,7 +95,13 @@ LITESTEP_META_PSET_NAME = "LITESTEP_META"
 #: skills corpus before that calls it — 22 sites across 8 systems — so the
 #: reach here is the opposite of v17's: broad among stored user models, and zero
 #: in the corpus, which was migrated in the same chapter.
-LITESTEP_META_VERSION = "18"
+#: v19 — ``Box(rotations=)`` is DELETED; the one rotation path is
+#: ``placement=Transform(...)``. Removed-API shape, like v18: a stored v18
+#: source passing ``rotations=`` to a Box used to compile (the solid rotated, but
+#: every bounds query ignored it) and now stops at construction with a message
+#: naming the replacement. Zero uses in the skills corpus; the reach is stored
+#: user models.
+LITESTEP_META_VERSION = "19"
 
 
 @dataclass
