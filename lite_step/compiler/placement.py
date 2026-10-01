@@ -19,9 +19,9 @@ Pinned conventions (WS1 PR-F — proven by measured-geometry tests in
 * The rotation list composes left-to-right in list order
   (``R_total = R_1 @ R_2 @ ... @ R_n``), i.e. an INTRINSIC sequence: each
   subsequent rotation is about the element's already-rotated axes. This is
-  the same composition order the legacy box ``rotations=`` field uses in
-  ``_create_solid_box`` (``rotation_matrix = rotation_matrix @ rot`` in
-  list order), so the two conventions never disagree.
+  the composition order the removed ``Box(rotations=)`` field used
+  (``rotation_matrix = rotation_matrix @ rot`` in list order), kept so stored
+  sources that rotated through ``Transform`` do not change.
 * Angles are centidegrees (RULE 3), right-hand rule about the named axis;
   axes are ``"x"``/``"y"``/``"z"`` (lowercase, construction-enforced).
 

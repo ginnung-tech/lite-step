@@ -447,11 +447,11 @@ def _stamped_base_ifc(version: str, monkeypatch) -> str:
     return generated.ifc_content
 
 
-@pytest.mark.parametrize("version", ["17", "19"])
+@pytest.mark.parametrize("version", ["18", "20"])
 def test_base_ifc_from_a_foreign_version_is_refused(tmp_path, monkeypatch, version):
     """``compile_main`` refuses to continue a base it did not write.
 
-    Both directions matter: "17" is a version below the floor (v18), "19" is a
+    Both directions matter: "18" is a version below the floor (v19), "20" is a
     base written by a compiler NEWER than this one — which no enumeration of
     known-bad versions can ever contain. Both move with every
     ``LITESTEP_META_VERSION`` bump; a pair left behind stops testing the

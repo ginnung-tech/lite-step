@@ -72,10 +72,10 @@ def test_add_never_moves_the_child():
     wall = _south_wall()
     box = _payload()
     before = (box.start.x, box.start.y, box.start.z,
-              box.end.x, box.end.y, box.end.z, tuple(box.rotations))
+              box.end.x, box.end.y, box.end.z)
     wall.add(box)
     after = (box.start.x, box.start.y, box.start.z,
-             box.end.x, box.end.y, box.end.z, tuple(box.rotations))
+             box.end.x, box.end.y, box.end.z)
     assert before == after
     assert box._anchor_spec is None
 

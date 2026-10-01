@@ -154,7 +154,7 @@ class TestForwardOnlyVersionGate:
     # a version far past the ladder's end, and a plausible NEXT one.
     @pytest.mark.parametrize(
         "version", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11",
-                    "12", "13", "14", "15", "16", "17", "19", "99"],
+                    "12", "13", "14", "15", "16", "17", "18", "20", "99"],
     )
     def test_foreign_version_base_is_refused(self, version, monkeypatch):
         base = _base_stamped(version, monkeypatch)

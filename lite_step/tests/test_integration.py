@@ -68,7 +68,7 @@ class TestEmbeddingRoundTrip:
         assert meta is not None
         assert meta.source == CARPORT_SOURCE
         assert meta.hash_valid is True
-        assert meta.version == "18"  # .no_carve() deleted
+        assert meta.version == "19"  # Box(rotations=) deleted
 
     def test_manifest_has_elements(self):
         """Manifest should contain all named elements."""
