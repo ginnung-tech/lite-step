@@ -24,7 +24,7 @@ export interface IncomingFile {
   data: Buffer;
 }
 
-export type OnFileReceived = (file: IncomingFile) => void | Promise<void>;
+export type OnFileReceived = (file: IncomingFile) => void;
 
 export class LiteStepServer {
   private _wss: WebSocketServer | null = null;
@@ -393,7 +393,7 @@ export class LiteStepServer {
   private _handleInlineFile(ws: WebSocket, id: string, filename: string, content: string, sizeBytes?: number): void {
     try {
       if (this._onFileReceived) {
-        this._onFileReceived({
+        void this._onFileReceived({
           id,
           filename,
           sizeBytes: sizeBytes || content.length,
@@ -454,7 +454,7 @@ export class LiteStepServer {
 
     if (this._onFileReceived) {
       try {
-        this._onFileReceived({
+        void this._onFileReceived({
           id: state.id,
           filename: state.filename,
           sizeBytes: state.sizeBytes,

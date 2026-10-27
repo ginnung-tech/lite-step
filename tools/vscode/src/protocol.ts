@@ -17,7 +17,7 @@ export interface PushMessage {
   type: "ifc.push" | "file.push";
   version: string;
   id: string;
-  direction: "to-blender" | "to-client" | "to-vscode" | string;
+  direction: "to-blender" | "to-client" | "to-vscode";
   filename: string;
   fileType?: "python" | "ifc";
   content?: string;
