@@ -6,14 +6,14 @@
  */
 
 import * as vscode from "vscode";
-import * as path from "path";
+import * as crypto from "node:crypto";
 
 export class PreviewPanel {
   public static readonly viewType = "ginnung.preview";
 
   private static _instance: PreviewPanel | undefined;
-  private _panel: vscode.WebviewPanel;
-  private _extensionUri: vscode.Uri;
+  private readonly _panel: vscode.WebviewPanel;
+  private readonly _extensionUri: vscode.Uri;
   private _disposed = false;
 
   public static show(
@@ -198,10 +198,5 @@ export class PreviewPanel {
 }
 
 function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return text;
+  return crypto.randomBytes(16).toString("base64");
 }

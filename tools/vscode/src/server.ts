@@ -28,20 +28,20 @@ export type OnFileReceived = (file: IncomingFile) => void;
 
 export class GinnungServer {
   private _wss: WebSocketServer | null = null;
-  private _clients: Set<WebSocket> = new Set();
+  private readonly _clients: Set<WebSocket> = new Set();
   private _port: number;
   private _onFileReceived: OnFileReceived | null = null;
 
   /** Per-client state for incoming binary frames */
-  private _incomingState: Map<
+  private readonly _incomingState: Map<
     WebSocket,
     { id: string; filename: string; sizeBytes: number }
   > = new Map();
 
-  private _statusBarItem: vscode.StatusBarItem;
-  private _heartbeatIntervals: Map<WebSocket, ReturnType<typeof setInterval>> =
+  private readonly _statusBarItem: vscode.StatusBarItem;
+  private readonly _heartbeatIntervals: Map<WebSocket, ReturnType<typeof setInterval>> =
     new Map();
-  private _onDidChangeStatus = new vscode.EventEmitter<void>();
+  private readonly _onDidChangeStatus = new vscode.EventEmitter<void>();
   public readonly onDidChangeStatus = this._onDidChangeStatus.event;
 
   constructor(statusBarItem: vscode.StatusBarItem, port: number = 9877) {
@@ -75,10 +75,26 @@ export class GinnungServer {
       this._port = port;
     }
 
+    const config = vscode.workspace.getConfiguration("ginnung");
+    const allowedOrigins = config.get<string[]>("allowedOrigins", [
+      "https://ginnung.tech",
+      "https://staging.grab.technology",
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:5180",
+      "http://127.0.0.1:5180",
+      "vscode-webview://",
+    ]);
+
     this._wss = new WebSocketServer({
       host: "127.0.0.1",
       port: this._port,
       maxPayload: 100 * 1024 * 1024,
+      verifyClient: (info: { origin: string }) => {
+        const origin = info.origin;
+        if (!origin) return true;
+        return allowedOrigins.some((allowed) => origin === allowed || origin.startsWith(allowed));
+      },
     });
 
     this._wss.on("connection", (ws) => this._handleConnection(ws));
@@ -133,8 +149,8 @@ export class GinnungServer {
   /** Push both Python model and compiled IFC model by issuing /delete:all and waiting for reconnect */
   pushModelWithWipe(
     pyContent: string,
-    pyFilename: string = "output.py",
     ifcContent: string,
+    pyFilename: string = "output.py",
     ifcFilename: string = "output.ifc"
   ): void {
     const batchId = `vsc-batch-${Date.now()}`;
@@ -145,155 +161,190 @@ export class GinnungServer {
       ifcFilename,
     };
 
-    if (!this._wss || this._clients.size === 0) {
-      console.log("[Ginnung] No clients connected; model pair cached for next connection.");
+    console.log(`[Ginnung] Stored current model pair in server memory (batch: ${batchId}).`);
+
+    if (this._clients.size === 0) {
+      console.log("[Ginnung] No clients connected to push wipe command to.");
       return;
     }
 
-    // Send initial /delete:all command to trigger account wipe & page reload
-    const wipeMsg = buildPush(
-      `vsc-wipe-${Date.now()}`,
-      "to-ginnung",
-      pyFilename,
-      Buffer.byteLength(pyContent, "utf-8"),
-      pyContent,
-      {
-        fileType: "python",
-        batchId,
-        command: "/delete:all",
-      }
-    );
-    this._broadcast(wipeMsg);
+    const wipeMsg = JSON.stringify({
+      type: "file.push",
+      version: "1.1",
+      id: `wipe-${Date.now()}`,
+      direction: "to-ginnung",
+      filename: pyFilename,
+      fileType: "python",
+      command: "/delete:all",
+      batchId,
+    });
 
-    console.log(
-      `[Ginnung] Sent /delete:all command to Web App (batchId: ${batchId}). Waiting for reconnect to send both output.py and output.ifc.`
-    );
+    for (const ws of this._clients) {
+      try {
+        ws.send(wipeMsg);
+        console.log(`[Ginnung] Sent /delete:all wipe command to client.`);
+      } catch (e) {
+        console.error(`[Ginnung] Failed to send wipe command: ${e}`);
+      }
+    }
   }
 
-  /** Send both output.py and output.ifc to a client with NO command */
+  /** Send current stored model pair to a client */
   sendModelPairToClient(ws: WebSocket): void {
     if (!this._currentModel) {
+      console.log("[Ginnung] No stored model to send to client.");
       return;
     }
 
-    const { pyContent, pyFilename, ifcContent, ifcFilename } =
-      this._currentModel;
-    const batchId = `vsc-batch-${Date.now()}`;
-
-    console.log(
-      `[Ginnung] Sending both '${pyFilename}' and '${ifcFilename}' to Web App (batchId: ${batchId}, no command)`
-    );
-
-    // 1. Send Python file (output.py)
-    const pyMsg = buildPush(
-      `vsc-py-${Date.now()}`,
-      "to-ginnung",
-      pyFilename,
-      Buffer.byteLength(pyContent, "utf-8"),
-      pyContent,
-      {
-        fileType: "python",
-        batchId,
-      }
-    );
-
-    // 2. Send IFC file (output.ifc)
-    const ifcMsg = buildPush(
-      `vsc-ifc-${Date.now()}`,
-      "to-ginnung",
-      ifcFilename,
-      Buffer.byteLength(ifcContent, "utf-8"),
-      ifcContent,
-      {
-        fileType: "ifc",
-        batchId,
-      }
-    );
+    const { pyContent, pyFilename, ifcContent, ifcFilename } = this._currentModel;
+    const batchId = `vsc-pair-${Date.now()}`;
 
     try {
-      ws.send(pyMsg);
-      ws.send(ifcMsg);
+      const pyPush = JSON.stringify({
+        type: "file.push",
+        version: "1.1",
+        id: `pair-py-${Date.now()}`,
+        direction: "to-ginnung",
+        filename: pyFilename,
+        fileType: "python",
+        content: pyContent,
+        batchId,
+      });
+      ws.send(pyPush);
+      console.log(`[Ginnung] Sent Python model '${pyFilename}' to client.`);
+
+      const ifcPush = JSON.stringify({
+        type: "file.push",
+        version: "1.1",
+        id: `pair-ifc-${Date.now()}`,
+        direction: "to-ginnung",
+        filename: ifcFilename,
+        fileType: "ifc",
+        content: ifcContent,
+        batchId,
+      });
+      ws.send(ifcPush);
+      console.log(`[Ginnung] Sent IFC model '${ifcFilename}' to client.`);
     } catch (e) {
-      console.error(`[Ginnung] Error sending model pair to client: ${e}`);
+      console.error(`[Ginnung] Failed sending model pair to client: ${e}`);
     }
   }
 
-  private _broadcast(textMessage: string): void {
-    for (const ws of this._clients) {
-      try {
-        ws.send(textMessage);
-      } catch (e) {
-        console.error(`[Ginnung] Error broadcasting to client: ${e}`);
-      }
-    }
-  }
-
-  /** Send a file (.py or .ifc) to all connected clients with overwrite/clear command */
-  sendFileToClients(
-    fileBytes: Buffer,
-    filename: string,
-    options: { overwrite?: boolean; clearExisting?: boolean; command?: string } = {
-      overwrite: true,
-      clearExisting: true,
-      command: "/delete:all",
-    }
+  /** Send document.sync message to all connected clients */
+  broadcastDocumentSync(
+    documentId: "lite_step" | "ifc_step_file",
+    content: string,
+    contentType: "text/x-python" | "application/x-step",
+    fileName: string
   ): void {
-    if (!this._wss || this._clients.size === 0) {
-      return;
-    }
-
-    const id = `vsc-push-${Date.now()}`;
-    const textContent = fileBytes.toString("utf-8");
-    const pushMsg = buildPush(
+    const id = `vsc-sync-${Date.now()}`;
+    const msg = JSON.stringify({
+      type: "document.sync",
+      version: "1.1",
       id,
-      "to-ginnung",
-      filename,
-      fileBytes.length,
-      textContent,
-      options
-    );
+      payload: {
+        documentId,
+        content,
+        contentType,
+        metadata: {
+          lastModified: Date.now(),
+          source: "vscode",
+          fileName,
+        },
+      },
+    });
 
-    for (const ws of this._clients) {
-      try {
-        ws.send(pushMsg);
-        // Send binary payload as well for clients expecting binary frame
-        ws.send(fileBytes);
-        console.log(`[Ginnung] Sent file '${filename}' to client (overwrite=true, command=/delete:all)`);
-      } catch (e) {
-        console.error(`[Ginnung] Error sending to client: ${e}`);
-      }
-    }
+    this._broadcast(msg);
   }
 
   /** Send a document.sync text message to all clients */
   sendTextSync(jsonMessage: string): void {
-    for (const ws of this._clients) {
-      try {
-        ws.send(jsonMessage);
-      } catch (e) {
-        console.error(`[Ginnung] Error sending sync: ${e}`);
-      }
-    }
+    this._broadcast(jsonMessage);
   }
 
   dispose(): void {
     this.stop();
   }
 
-  // ── Private ──────────────────────────────────────────────
+  /** Send raw text message to all connected clients */
+  private _broadcast(text: string): void {
+    for (const ws of this._clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(text);
+        } catch (e) {
+          console.error(`[Ginnung] Error sending to client: ${e}`);
+        }
+      }
+    }
+  }
+
+  /** Push an IFC file to all connected clients */
+  pushIfc(ifcBytes: Buffer, filename: string = "model.ifc"): void {
+    const id = `vsc-ifc-${Date.now()}`;
+    const pushMsg = buildPush(id, "to-ginnung", filename, ifcBytes.length);
+
+    for (const ws of this._clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(pushMsg);
+          ws.send(ifcBytes);
+          console.log(`[Ginnung] Pushed IFC '${filename}' (${ifcBytes.length} bytes)`);
+        } catch (e) {
+          console.error(`[Ginnung] Error pushing IFC: ${e}`);
+        }
+      }
+    }
+  }
+
+  /** Push a Python or IFC file inline to all connected clients */
+  pushFile(
+    filename: string,
+    content: string,
+    options?: {
+      fileType?: "python" | "ifc";
+      batchId?: string;
+      clearExisting?: boolean;
+      overwrite?: boolean;
+      command?: string;
+    }
+  ): void {
+    const id = `vsc-file-${Date.now()}`;
+    const pushMsg = buildPush(
+      id,
+      "to-ginnung",
+      filename,
+      content.length,
+      content,
+      options
+    );
+
+    this._broadcast(pushMsg);
+    console.log(
+      `[Ginnung] Pushed inline file '${filename}' (${content.length} chars)`
+    );
+  }
 
   private _handleConnection(ws: WebSocket): void {
     this._clients.add(ws);
-    console.log("[Ginnung] Client connected");
+    console.log(
+      `[Ginnung] Client connected. Total clients: ${this._clients.size}`
+    );
 
-    ws.send(buildHello());
+    // Send hello handshake
+    try {
+      ws.send(buildHello());
+    } catch (e) {
+      console.error(`[Ginnung] Error sending hello: ${e}`);
+    }
 
-    const hb = setInterval(() => {
+    // Ping/pong heartbeat
+    const pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.ping();
       }
-    }, 15_000);
-    this._heartbeatIntervals.set(ws, hb);
+    }, 30_000);
+    this._heartbeatIntervals.set(ws, pingInterval);
 
     ws.on("message", (data: RawData, isBinary: boolean) => {
       if (isBinary) {
@@ -311,7 +362,9 @@ export class GinnungServer {
         clearInterval(interval);
         this._heartbeatIntervals.delete(ws);
       }
-      console.log("[Ginnung] Client disconnected");
+      console.log(
+        `[Ginnung] Client disconnected. Total clients: ${this._clients.size}`
+      );
       this._updateStatusBar();
     });
 
@@ -322,51 +375,64 @@ export class GinnungServer {
     this._updateStatusBar();
   }
 
+  private _handlePushMessage(ws: WebSocket, msg: ProtocolMessage & { type: "file.push" | "ifc.push" }): void {
+    if (msg.direction !== "to-vscode" && msg.direction !== "to-blender") {
+      return;
+    }
+    const filename = msg.filename || "pushed_file.py";
+    if (msg.content) {
+      this._handleInlineFile(ws, msg.id, filename, msg.content, msg.sizeBytes);
+    } else {
+      this._incomingState.set(ws, {
+        id: msg.id,
+        filename,
+        sizeBytes: msg.sizeBytes,
+      });
+      console.log(`[Ginnung] Expecting file '${filename}' (${msg.sizeBytes} bytes)`);
+    }
+  }
+
+  private _handleInlineFile(ws: WebSocket, id: string, filename: string, content: string, sizeBytes?: number): void {
+    try {
+      if (this._onFileReceived) {
+        this._onFileReceived({
+          id,
+          filename,
+          sizeBytes: sizeBytes || content.length,
+          data: Buffer.from(content, "utf-8"),
+        });
+      }
+      ws.send(buildStatus(id, "loaded"));
+    } catch (e) {
+      console.error(`[Ginnung] Error handling inline file: ${e}`);
+      ws.send(buildError(id, `Load failed: ${e}`));
+    }
+  }
+
+  private _handleStatusMessage(ws: WebSocket, msg: ProtocolMessage & { type: "status" }): void {
+    console.log(`[Ginnung] Status for ${msg.id}: ${msg.status}`);
+    if (msg.status === "connected") {
+      console.log(
+        `[Ginnung] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
+      );
+      this.sendModelPairToClient(ws);
+    }
+  }
+
   private _handleText(ws: WebSocket, raw: string): void {
     try {
       const msg: ProtocolMessage = parseMessage(raw);
-
-      if (msg.type === "file.push" || msg.type === "ifc.push") {
-        if (msg.direction === "to-vscode" || msg.direction === "to-blender") {
-          const filename = msg.filename || "pushed_file.py";
-          if (msg.content) {
-            // Inline content present
-            try {
-              if (this._onFileReceived) {
-                this._onFileReceived({
-                  id: msg.id,
-                  filename,
-                  sizeBytes: msg.sizeBytes || msg.content.length,
-                  data: Buffer.from(msg.content, "utf-8"),
-                });
-              }
-              ws.send(buildStatus(msg.id, "loaded"));
-            } catch (e) {
-              console.error(`[Ginnung] Error handling inline file: ${e}`);
-              ws.send(buildError(msg.id, `Load failed: ${e}`));
-            }
-          } else {
-            // Expect binary payload frame next
-            this._incomingState.set(ws, {
-              id: msg.id,
-              filename,
-              sizeBytes: msg.sizeBytes,
-            });
-            console.log(
-              `[Ginnung] Expecting file '${filename}' (${msg.sizeBytes} bytes)`
-            );
-          }
-        }
-      } else if (msg.type === "status") {
-        console.log(`[Ginnung] Status for ${msg.id}: ${msg.status}`);
-        if (msg.status === "connected") {
-          console.log(
-            `[Ginnung] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
-          );
-          this.sendModelPairToClient(ws);
-        }
-      } else if (msg.type === "hello") {
-        console.log("[Ginnung] Received hello-ack from client");
+      switch (msg.type) {
+        case "file.push":
+        case "ifc.push":
+          this._handlePushMessage(ws, msg);
+          break;
+        case "status":
+          this._handleStatusMessage(ws, msg);
+          break;
+        case "hello":
+          console.log("[Ginnung] Received hello-ack from client");
+          break;
       }
     } catch (e) {
       console.error(`[Ginnung] Error parsing message: ${e}`);

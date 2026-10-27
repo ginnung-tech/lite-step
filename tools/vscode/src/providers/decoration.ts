@@ -6,13 +6,13 @@
  */
 
 import * as vscode from "vscode";
-import * as fs from "fs";
+import * as fs from "node:fs";
 import { isLiteStepFile, clearCache } from "../detection";
 
 export class GinnungDecorationProvider
   implements vscode.FileDecorationProvider
 {
-  private _onDidChangeFileDecorations =
+  private readonly _onDidChangeFileDecorations =
     new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
   public readonly onDidChangeFileDecorations =
     this._onDidChangeFileDecorations.event;

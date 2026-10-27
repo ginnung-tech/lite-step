@@ -9,8 +9,8 @@
  */
 
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 import { GinnungServer } from "./server";
 import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
@@ -40,7 +40,6 @@ export function activate(context: vscode.ExtensionContext) {
     100
   );
   statusBarItem.command = "ginnung.startServer";
-  context.subscriptions.push(statusBarItem);
 
   // Server
   const config = vscode.workspace.getConfiguration("ginnung");
@@ -50,7 +49,8 @@ export function activate(context: vscode.ExtensionContext) {
   // Handle incoming files pushed from Ginnung web app → save in workspace root under ginnung-<timestamp>
   server.onFileReceived = async (file) => {
     try {
-      const filename = file.filename || "output.py";
+      const rawFilename = file.filename || "output.py";
+      const filename = path.basename(rawFilename.replace(/\\/g, "/"));
       const workspaceRoot = getWorkspaceRoot();
       const folderName = getTimestampFolder();
       const targetDir = path.join(workspaceRoot, folderName);
@@ -60,6 +60,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const targetPath = path.join(targetDir, filename);
+      const resolvedTarget = path.resolve(targetPath);
+      const resolvedDir = path.resolve(targetDir);
+      if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+        throw new Error(`Rejected unsafe filename '${file.filename}'`);
+      }
       fs.writeFileSync(targetPath, file.data);
 
       const doc = await vscode.workspace.openTextDocument(targetPath);
@@ -78,9 +83,18 @@ export function activate(context: vscode.ExtensionContext) {
     server.start(port);
   }
 
-  // ── Commands ───────────────────────────────────────────
+  // ── Providers ──────────────────────────────────────────
+
+  sidebarProvider = new GinnungSidebarProvider(server);
+  codeLensProvider = new GinnungCodeLensProvider();
+  const hoverProvider = new GinnungHoverProvider();
+  decorationProvider = new GinnungDecorationProvider();
+
+  // ── Commands & Subscriptions ───────────────────────────
 
   context.subscriptions.push(
+    statusBarItem,
+    sidebarProvider,
     vscode.commands.registerCommand("ginnung.startServer", () => {
       if (server.isRunning) {
         vscode.window.showInformationMessage(
@@ -93,17 +107,11 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage(
         `Ginnung server started on port ${server.port}`
       );
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.commands.registerCommand("ginnung.stopServer", () => {
       server.stop();
       vscode.window.showInformationMessage("Ginnung server stopped");
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.commands.registerCommand(
       "ginnung.previewFile",
       async (uri?: vscode.Uri) => {
@@ -114,29 +122,20 @@ export function activate(context: vscode.ExtensionContext) {
           );
           return;
         }
-
         await previewFile(filePath, context.extensionUri);
       }
-    )
-  );
-
-  context.subscriptions.push(
+    ),
     vscode.commands.registerCommand(
       "ginnung.pushToWeb",
       async (uri?: vscode.Uri) => {
         if (!server.isRunning) {
-          vscode.window.showWarningMessage(
-            "Start the Ginnung server first"
-          );
+          vscode.window.showWarningMessage("Start the Ginnung server first");
           return;
         }
         if (server.clientCount === 0) {
-          vscode.window.showWarningMessage(
-            "No Ginnung clients connected"
-          );
+          vscode.window.showWarningMessage("No Ginnung clients connected");
           return;
         }
-
         const filePath = resolveTargetFile(uri);
         if (!filePath) {
           vscode.window.showWarningMessage(
@@ -144,13 +143,9 @@ export function activate(context: vscode.ExtensionContext) {
           );
           return;
         }
-
         await pushFileToWeb(filePath);
       }
-    )
-  );
-
-  context.subscriptions.push(
+    ),
     vscode.commands.registerCommand(
       "ginnung.pushToBlender",
       async (uri?: vscode.Uri) => {
@@ -161,75 +156,37 @@ export function activate(context: vscode.ExtensionContext) {
           );
           return;
         }
-
         await pushFileToBlender(filePath);
       }
-    )
-  );
-
-  context.subscriptions.push(
+    ),
     vscode.commands.registerCommand("ginnung.refresh", () => {
       clearCache();
       codeLensProvider.refresh();
       decorationProvider.refresh();
       sidebarProvider.refresh();
-      sidebarProvider.probeBlender();
+      void sidebarProvider.probeBlender().catch(() => {});
       vscode.window.showInformationMessage(
         "Ginnung: Detection cache and connection status refreshed"
       );
-    })
-  );
-
-  context.subscriptions.push(
+    }),
     vscode.commands.registerCommand("ginnung.refreshStatus", async () => {
       sidebarProvider.refresh();
       await sidebarProvider.probeBlender();
-    })
-  );
-
-  // ── Providers ──────────────────────────────────────────
-
-  sidebarProvider = new GinnungSidebarProvider(server);
-  context.subscriptions.push(sidebarProvider);
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider(
-      "ginnung.statusView",
-      sidebarProvider
-    )
-  );
-
-  codeLensProvider = new GinnungCodeLensProvider();
-  context.subscriptions.push(
+    }),
+    vscode.window.registerTreeDataProvider("ginnung.statusView", sidebarProvider),
     vscode.languages.registerCodeLensProvider(
       [
         { language: "python" },
         { pattern: "**/*.ifc" },
       ],
       codeLensProvider
-    )
-  );
-
-  const hoverProvider = new GinnungHoverProvider();
-  context.subscriptions.push(
-    vscode.languages.registerHoverProvider(
-      { language: "python" },
-      hoverProvider
-    )
-  );
-
-  decorationProvider = new GinnungDecorationProvider();
-  context.subscriptions.push(
-    vscode.window.registerFileDecorationProvider(decorationProvider)
-  );
-
-  // ── Auto-sync on save ──────────────────────────────────
-
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(async (doc) => {
+    ),
+    vscode.languages.registerHoverProvider({ language: "python" }, hoverProvider),
+    vscode.window.registerFileDecorationProvider(decorationProvider),
+    vscode.workspace.onDidSaveTextDocument((doc) => {
       if (!server.isRunning || server.clientCount === 0) {
         return;
       }
-
       const fsPath = doc.uri.fsPath.toLowerCase();
       if (fsPath.endsWith(".ifc")) {
         const syncMsg = buildDocumentSync(
@@ -249,12 +206,7 @@ export function activate(context: vscode.ExtensionContext) {
         );
         server.sendTextSync(syncMsg);
       }
-    })
-  );
-
-  // ── Invalidate cache on file change ────────────────────
-
-  context.subscriptions.push(
+    }),
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document.languageId === "python") {
         clearCache();
@@ -330,7 +282,7 @@ async function previewFile(
   const baseName = path.basename(filePath);
 
   if (ext === ".ifc") {
-    const ifcData = readIfcFile(filePath);
+    const ifcData = await readIfcFile(filePath);
     PreviewPanel.show(extensionUri, ifcData, baseName);
     return;
   }
@@ -346,7 +298,7 @@ async function previewFile(
       async () => {
         const result = await compileLiteStep(filePath);
         if (result.success) {
-          const ifcData = readIfcFile(result.ifcPath);
+          const ifcData = await readIfcFile(result.ifcPath);
           PreviewPanel.show(extensionUri, ifcData, baseName);
         } else {
           vscode.window.showErrorMessage(
@@ -355,7 +307,6 @@ async function previewFile(
         }
       }
     );
-    return;
   }
 }
 
@@ -382,14 +333,13 @@ async function pushFileToWeb(filePath: string): Promise<void> {
         const pyContent = fs.readFileSync(filePath, "utf-8");
         const ifcContent = fs.readFileSync(compResult.ifcPath, "utf-8");
 
-        server.pushModelWithWipe(pyContent, "output.py", ifcContent, "output.ifc");
+        server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
 
         vscode.window.showInformationMessage(
           `Ginnung: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
         );
       }
     );
-    return;
   }
 
   if (ext === ".ifc") {
@@ -407,7 +357,7 @@ async function pushFileToWeb(filePath: string): Promise<void> {
       pyContent = fs.readFileSync(workspacePy, "utf-8");
     }
 
-    server.pushModelWithWipe(pyContent, "output.py", ifcContent, "output.ifc");
+    server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
 
     vscode.window.showInformationMessage(
       `Ginnung: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`

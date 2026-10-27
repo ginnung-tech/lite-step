@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 id = "ginnung"
 version = "1.1.0"
 name = "Ginnung"
-tagline = "Bridge web applications and Lite-STEP models to Blender via WebSocket and IFC (requires Bonsai)"
+tagline = "Bridge Lite-STEP models to Blender over WebSocket and IFC"
 maintainer = "Lite-STEP Contributors"
 type = "add-on"
 blender_version_min = "5.0.0"
@@ -14,9 +14,9 @@ repository = "https://github.com/ginnung-tech/lite-step"
 tracker = "https://github.com/ginnung-tech/lite-step/issues"
 
 wheels = [
-    "./wheels/websockets-16.1.1-cp313-cp313-win_amd64.whl",
+    "./wheels/websockets-16.1.1-py3-none-any.whl",
 ]
 
 [permissions]
-network = "Required to host the WebSocket server for client communication."
-files = "Required to import and export IFC files via Bonsai."
+network = "Host the local WebSocket server for client communication"
+files = "Import and export IFC files via Bonsai"

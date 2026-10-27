@@ -26,11 +26,18 @@ class GinnungPreferences(AddonPreferences):
         default="",
     ) # type: ignore
 
+    execute_embedded_scripts: BoolProperty(
+        name="Execute Embedded Sidecar Scripts",
+        description="Allow running embedded init_sidecars.py scripts from opened presentation shells",
+        default=False,
+    ) # type: ignore
+
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "port")
         layout.prop(self, "auto_start")
         layout.prop(self, "blend_template")
+        layout.prop(self, "execute_embedded_scripts")
 
 def get_preferences(context=None):
     if context is None:

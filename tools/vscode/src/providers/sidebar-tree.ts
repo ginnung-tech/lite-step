@@ -68,11 +68,13 @@ export class GinnungSidebarProvider
       })
     );
 
-    // Initial probe & background periodic probe of Blender status (every 8 seconds)
-    this.probeBlender();
+    // Periodic probe of Blender status (every 8 seconds)
     this._probeTimer = setInterval(() => {
-      this.probeBlender();
+      void this.probeBlender().catch(() => {});
     }, 8000);
+    setTimeout(() => {
+      void this.probeBlender().catch(() => {});
+    }, 0);
   }
 
   public refresh(): void {
@@ -102,7 +104,7 @@ export class GinnungSidebarProvider
     return element;
   }
 
-  async getChildren(element?: GinnungTreeItem): Promise<GinnungTreeItem[]> {
+  getChildren(element?: GinnungTreeItem): GinnungTreeItem[] {
     if (element) {
       return [];
     }
@@ -246,10 +248,7 @@ export class GinnungSidebarProvider
             title: "Push Model to Web App",
           },
         }
-      )
-    );
-
-    items.push(
+      ),
       new GinnungTreeItem(
         "Push Model to Blender",
         "action-push-blender",
@@ -263,10 +262,7 @@ export class GinnungSidebarProvider
             title: "Push Model to Blender",
           },
         }
-      )
-    );
-
-    items.push(
+      ),
       new GinnungTreeItem(
         "Preview Model in 3D",
         "action-preview",

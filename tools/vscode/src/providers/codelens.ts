@@ -9,7 +9,7 @@ import * as vscode from "vscode";
 import { isLiteStepFile } from "../detection";
 
 export class GinnungCodeLensProvider implements vscode.CodeLensProvider {
-  private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
+  private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
   public readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 
   public refresh(): void {
@@ -37,18 +37,12 @@ export class GinnungCodeLensProvider implements vscode.CodeLensProvider {
         title: "$(eye) Preview Model",
         command: "ginnung.previewFile",
         tooltip: "Compile and preview this model in 3D",
-      })
-    );
-
-    lenses.push(
+      }),
       new vscode.CodeLens(range, {
         title: "$(cloud-upload) Push to Web",
         command: "ginnung.pushToWeb",
         tooltip: "Push this model to connected Ginnung web clients",
-      })
-    );
-
-    lenses.push(
+      }),
       new vscode.CodeLens(range, {
         title: "$(symbol-misc) Push to Blender",
         command: "ginnung.pushToBlender",

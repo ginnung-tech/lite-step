@@ -1,6 +1,6 @@
 import * as esbuild from "esbuild";
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 const isWatch = process.argv.includes("--watch");
 
@@ -39,22 +39,15 @@ const webviewConfig = {
   minify: !isWatch,
 };
 
-async function main() {
-  copyVendorAssets();
-  if (isWatch) {
-    const extCtx = await esbuild.context(extensionConfig);
-    const webCtx = await esbuild.context(webviewConfig);
-    await extCtx.watch();
-    await webCtx.watch();
-    console.log("[esbuild] watching...");
-  } else {
-    await esbuild.build(extensionConfig);
-    await esbuild.build(webviewConfig);
-    console.log("[esbuild] build complete.");
-  }
+copyVendorAssets();
+if (isWatch) {
+  const extCtx = await esbuild.context(extensionConfig);
+  const webCtx = await esbuild.context(webviewConfig);
+  await extCtx.watch();
+  await webCtx.watch();
+  console.log("[esbuild] watching...");
+} else {
+  await esbuild.build(extensionConfig);
+  await esbuild.build(webviewConfig);
+  console.log("[esbuild] build complete.");
 }
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});

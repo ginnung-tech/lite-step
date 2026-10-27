@@ -44,6 +44,7 @@ class GinnungServer:
                 self.host,
                 self.port,
                 max_size=100 * 1024 * 1024,
+                origins=[None],
             ) as server:
                 self._server = server
                 print(f"Ginnung: Server listening on ws://{self.host}:{self.port}")
@@ -55,7 +56,7 @@ class GinnungServer:
         except (asyncio.CancelledError, KeyboardInterrupt):
             pass
         except Exception as e:
-            logger.error(f"Failed to start WebSocket server: {e}")
+            logger.exception("Failed to start WebSocket server")
         finally:
             try:
                 if self._loop and not self._loop.is_closed():
@@ -95,7 +96,7 @@ class GinnungServer:
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client disconnected: {websocket.remote_address}")
         except Exception as e:
-            logger.error(f"WebSocket handler error: {e}")
+            logger.exception("WebSocket handler error")
         finally:
             self.active_connections.discard(websocket)
             if websocket in self._incoming_state:
@@ -109,7 +110,7 @@ class GinnungServer:
                     data = parse_message(msg)
                     await self._handle_json_message(websocket, data)
                 except Exception as e:
-                    logger.error(f"Error handling message: {e}")
+                    logger.exception("Error handling message")
                     await websocket.send(build_error(None, str(e)))
             elif isinstance(msg, bytes):
                 # Binary Frame (IFC data)
@@ -171,7 +172,7 @@ class GinnungServer:
                 print(f"Ginnung: Sent status ack 'loaded' for {msg_id}")
             except Exception as e:
                 print(f"Ginnung: Error processing received IFC: {e}")
-                logger.error(f"Error processing received IFC: {e}")
+                logger.exception("Error processing received IFC")
                 await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
 
     def send_ifc_to_clients(self, ifc_bytes: bytes, filename: str) -> None:
@@ -185,13 +186,13 @@ class GinnungServer:
             msg_id = str(uuid.uuid4())
             push_msg = build_push(msg_id, "to-ginnung", filename, len(ifc_bytes))
             
-            for ws in list(self.active_connections):
+            for ws in self.active_connections.copy():
                 try:
                     await ws.send(push_msg)
                     await ws.send(ifc_bytes)
                     logger.info(f"Sent IFC '{filename}' to {ws.remote_address}")
                 except Exception as e:
-                    logger.error(f"Error sending to client {ws.remote_address}: {e}")
+                    logger.exception(f"Error sending to client {ws.remote_address}")
 
         asyncio.run_coroutine_threadsafe(_send(), self._loop)
 

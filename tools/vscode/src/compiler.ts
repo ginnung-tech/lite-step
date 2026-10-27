@@ -5,16 +5,40 @@
  * `from lite_step...` imports resolve relative to the repository.
  */
 
-import { execFile } from "child_process";
-import * as path from "path";
-import * as os from "os";
-import * as fs from "fs";
+import { execFile } from "node:child_process";
+import * as path from "node:path";
+import * as os from "node:os";
+import * as fs from "node:fs";
 import * as vscode from "vscode";
 
 export interface CompileResult {
   success: boolean;
   ifcPath: string;
   stderr: string;
+}
+
+function checkWorkspaceFolders(): string | null {
+  const workspaceFolders = vscode.workspace.workspaceFolders || [];
+  for (const wf of workspaceFolders) {
+    const p = wf.uri.fsPath;
+    if (fs.existsSync(path.join(p, "lite_step"))) {
+      return p;
+    }
+  }
+  return null;
+}
+
+function checkParentDirs(sourceFilePath: string): string | null {
+  let dir = path.dirname(sourceFilePath);
+  for (let i = 0; i < 5; i++) {
+    if (fs.existsSync(path.join(dir, "lite_step"))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 /**
@@ -27,32 +51,17 @@ export function findLiteStepRepo(sourceFilePath?: string): string {
     return configuredPath;
   }
 
-  // 1. Check workspace folders
-  const workspaceFolders = vscode.workspace.workspaceFolders || [];
-  for (const wf of workspaceFolders) {
-    const p = wf.uri.fsPath;
-    if (fs.existsSync(path.join(p, "lite_step"))) {
-      return p;
-    }
-  }
+  const fromWorkspace = checkWorkspaceFolders();
+  if (fromWorkspace) return fromWorkspace;
 
-  // 2. Check source file directory and its parents
   if (sourceFilePath) {
-    let dir = path.dirname(sourceFilePath);
-    for (let i = 0; i < 5; i++) {
-      if (fs.existsSync(path.join(dir, "lite_step"))) {
-        return dir;
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
+    const fromParents = checkParentDirs(sourceFilePath);
+    if (fromParents) return fromParents;
   }
 
-  // 3. Check standard ~/projects/lite-step location
-  const candidate = path.join(os.homedir(), "projects", "lite-step");
-  if (fs.existsSync(candidate)) {
-    return candidate;
+  const homeCandidate = path.join(os.homedir(), "projects", "lite-step");
+  if (fs.existsSync(homeCandidate)) {
+    return homeCandidate;
   }
 
   return sourceFilePath ? path.dirname(sourceFilePath) : process.cwd();
@@ -70,6 +79,10 @@ export async function compileLiteStep(
   const repoRoot = findLiteStepRepo(filePath);
   const dir = path.dirname(filePath);
   const baseName = path.basename(filePath, ".py");
+  const startedAt = Date.now();
+
+  const config = vscode.workspace.getConfiguration("ginnung");
+  const pythonExecutable = config.get<string>("pythonPath") || "python";
 
   const env = {
     ...process.env,
@@ -79,9 +92,8 @@ export async function compileLiteStep(
   };
 
   return new Promise<CompileResult>((resolve) => {
-    // Run the Python model file directly: python <filePath>
     execFile(
-      "python",
+      pythonExecutable,
       [filePath],
       {
         cwd: dir,
@@ -90,16 +102,21 @@ export async function compileLiteStep(
         maxBuffer: 50 * 1024 * 1024,
       },
       (error, stdout, stderr) => {
-        // Look for generated IFC file next to the source script
-        const candidates = [
+        if (error) {
+          return resolve({
+            success: false,
+            ifcPath: "",
+            stderr: stderr || stdout || error.message,
+          });
+        }
+
+        // Look for generated IFC file next to the source script first
+        const localCandidates = [
           path.join(dir, "output.ifc"),
           path.join(dir, `${baseName}.ifc`),
-          path.join(repoRoot, "output.ifc"),
-          path.join(os.tmpdir(), "output.ifc"),
-          path.join(os.tmpdir(), `${baseName}.ifc`),
         ];
 
-        for (const candidate of candidates) {
+        for (const candidate of localCandidates) {
           if (fs.existsSync(candidate)) {
             return resolve({
               success: true,
@@ -109,12 +126,28 @@ export async function compileLiteStep(
           }
         }
 
-        if (error) {
-          return resolve({
-            success: false,
-            ifcPath: "",
-            stderr: stderr || stdout || error.message,
-          });
+        // External fallbacks must have been updated during this run
+        const externalCandidates = [
+          path.join(repoRoot, "output.ifc"),
+          path.join(os.tmpdir(), "output.ifc"),
+          path.join(os.tmpdir(), `${baseName}.ifc`),
+        ];
+
+        for (const candidate of externalCandidates) {
+          if (fs.existsSync(candidate)) {
+            try {
+              const stat = fs.statSync(candidate);
+              if (stat.mtimeMs >= startedAt - 1000) {
+                return resolve({
+                  success: true,
+                  ifcPath: candidate,
+                  stderr: stderr || stdout || "",
+                });
+              }
+            } catch {
+              // ignore stat error
+            }
+          }
         }
 
         resolve({
@@ -128,8 +161,8 @@ export async function compileLiteStep(
 }
 
 /**
- * Read an IFC file into a Buffer.
+ * Read the generated IFC file as a Buffer.
  */
-export function readIfcFile(filePath: string): Buffer {
-  return fs.readFileSync(filePath);
+export async function readIfcFile(ifcPath: string): Promise<Buffer> {
+  return fs.promises.readFile(ifcPath);
 }

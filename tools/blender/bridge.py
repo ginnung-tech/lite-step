@@ -6,20 +6,70 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MODEL_BLEND = "model.blend"
+DEFAULT_MODEL_IFC = "model.ifc"
+DEFAULT_EXPORT_IFC = "export.ifc"
+
+
+def _find_template_from_env() -> Optional[str]:
+    env_dir = os.environ.get("LITE_STEP_ASSETS_DIR") or os.environ.get("LITE_STEP_PATH")
+    if not env_dir:
+        return None
+    cand = os.path.join(env_dir, DEFAULT_MODEL_BLEND) if not env_dir.endswith(".blend") else env_dir
+    if os.path.exists(cand):
+        return cand
+    cand = os.path.join(env_dir, "lite_step", "assets", DEFAULT_MODEL_BLEND)
+    return cand if os.path.exists(cand) else None
+
+
+def _find_template_relative() -> Optional[str]:
+    addon_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(addon_dir, "..", "..", "lite_step", "assets", DEFAULT_MODEL_BLEND),
+        os.path.join(addon_dir, "..", "lite_step", "assets", DEFAULT_MODEL_BLEND),
+    ]
+    for cand in candidates:
+        norm = os.path.normpath(cand)
+        if os.path.exists(norm):
+            return norm
+    return None
+
+
+def _find_template_package_or_home() -> Optional[str]:
+    try:
+        import lite_step
+        if hasattr(lite_step, "__file__") and lite_step.__file__:
+            cand = os.path.join(os.path.dirname(lite_step.__file__), "assets", DEFAULT_MODEL_BLEND)
+            if os.path.exists(cand):
+                return cand
+    except Exception:
+        pass
+
+    home = os.path.expanduser("~")
+    for cand in [
+        os.path.join(home, "projects", "lite-step", "lite_step", "assets", DEFAULT_MODEL_BLEND),
+        os.path.join(os.getcwd(), "lite_step", "assets", DEFAULT_MODEL_BLEND),
+    ]:
+        if os.path.exists(cand):
+            return cand
+    return None
+
 
 def find_blend_template(preferred_path: Optional[str] = None) -> Optional[str]:
     """
     Locate the presentation shell .blend file (model.blend).
     Checks preferred_path, active Blender file, add-on preferences, and repository assets.
     """
-    if preferred_path and os.path.exists(preferred_path):
+    if (
+        isinstance(preferred_path, str)
+        and preferred_path.lower().endswith(".blend")
+        and os.path.exists(preferred_path)
+    ):
         return preferred_path
 
-    # If the currently open file in Blender is saved and is a .blend file, use it
     if bpy.data.is_saved and bpy.data.filepath and bpy.data.filepath.endswith(".blend"):
         return bpy.data.filepath
 
-    # Check add-on preferences
     try:
         from .preferences import get_preferences
         prefs = get_preferences()
@@ -30,72 +80,40 @@ def find_blend_template(preferred_path: Optional[str] = None) -> Optional[str]:
     except Exception:
         pass
 
-    # Check environment variable
-    env_dir = os.environ.get("LITE_STEP_ASSETS_DIR") or os.environ.get("LITE_STEP_PATH")
-    if env_dir:
-        cand = os.path.join(env_dir, "model.blend") if not env_dir.endswith(".blend") else env_dir
-        if os.path.exists(cand):
-            return cand
-        cand = os.path.join(env_dir, "lite_step", "assets", "model.blend")
-        if os.path.exists(cand):
-            return cand
-
-    # Check relative to this add-on directory (when in tools/blender)
-    addon_dir = os.path.dirname(os.path.abspath(__file__))
-    relative_candidates = [
-        os.path.join(addon_dir, "..", "..", "lite_step", "assets", "model.blend"),
-        os.path.join(addon_dir, "..", "lite_step", "assets", "model.blend"),
-    ]
-    for cand in relative_candidates:
-        norm = os.path.normpath(cand)
-        if os.path.exists(norm):
-            return norm
-
-    # Check if lite_step is installed/importable in Python environment
-    try:
-        import lite_step
-        if hasattr(lite_step, "__file__") and lite_step.__file__:
-            cand = os.path.join(os.path.dirname(lite_step.__file__), "assets", "model.blend")
-            if os.path.exists(cand):
-                return cand
-    except Exception:
-        pass
-
-    # Standard user directory locations
-    home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(home, "projects", "lite-step", "lite_step", "assets", "model.blend"),
-        os.path.join(os.getcwd(), "lite_step", "assets", "model.blend"),
-    ]
-    for cand in candidates:
-        if os.path.exists(cand):
-            return cand
-
-    return None
+    return _find_template_from_env() or _find_template_relative() or _find_template_package_or_home()
 
 
-def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional[str] = None) -> None:
+def sanitize_filename(filename: Optional[str]) -> str:
+    """Validate and sanitize an incoming IFC filename."""
+    if not isinstance(filename, str) or not filename.strip():
+        return DEFAULT_MODEL_IFC
+    cleaned = os.path.basename(filename.replace("\\", "/"))
+    if cleaned in ("import.ifc", "output.ifc", ""):
+        return DEFAULT_MODEL_IFC
+    if not cleaned.lower().endswith(".ifc"):
+        raise ValueError("Only .ifc files are accepted.")
+    return cleaned
+
+
+def load_ifc(ifc_bytes: bytes, filename: str = DEFAULT_MODEL_IFC, blend_path: Optional[str] = None) -> None:
     """
     Save the IFC bytes and load it into Blender via the presentation shell .blend file.
     
     1. Locates or opens the model.blend presentation shell (with sky, sun, and PBR materials).
     2. Writes the incoming IFC into the .blend file directory so textures and styles resolve.
     3. Loads the project into the scene via Bonsai.
-    4. Executes init_sidecars.py and binds the master PBR shaders to imported geometry.
+    4. Executes init_sidecars.py (if enabled) and binds master PBR shaders to imported geometry.
     """
-    target_blend = find_blend_template(blend_path)
+    target_filename = sanitize_filename(filename)
+    validated_blend = blend_path if isinstance(blend_path, str) and blend_path.lower().endswith(".blend") else None
+    target_blend = find_blend_template(validated_blend)
 
     if target_blend and os.path.exists(target_blend):
         blend_dir = os.path.dirname(target_blend)
-        # Normalize name to model.ifc if generic
-        if filename in ("import.ifc", "output.ifc", "", None):
-            target_filename = "model.ifc"
-        else:
-            target_filename = filename
         target_ifc_path = os.path.join(blend_dir, target_filename)
     else:
         temp_dir = tempfile.gettempdir()
-        target_ifc_path = os.path.join(temp_dir, filename if filename else "model.ifc")
+        target_ifc_path = os.path.join(temp_dir, target_filename)
         target_blend = None
 
     try:
@@ -105,8 +123,8 @@ def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional
         logger.info(f"Wrote received IFC to {target_ifc_path}")
     except Exception as e:
         print(f"Ginnung Error: Failed to write IFC file: {e}")
-        logger.error(f"Failed to write IFC file: {e}")
-        return
+        logger.exception("Failed to write IFC file")
+        raise
 
     def do_load() -> None:
         nonlocal target_blend
@@ -130,12 +148,12 @@ def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional
                 logger.info(f"Successfully loaded {target_ifc_path} via Bonsai.")
             except Exception as e:
                 print(f"Ginnung Error: Bonsai load_project error: {e}")
-                logger.error(f"Bonsai load error: {e}")
+                logger.exception("Bonsai load_project error")
         elif hasattr(bpy.ops.import_scene, "ifc"):
             try:
                 bpy.ops.import_scene.ifc(filepath=target_ifc_path)
             except Exception as e:
-                logger.error(f"Import IFC error: {e}")
+                logger.exception("Import IFC error")
         else:
             print("Ginnung Error: Bonsai add-on (bpy.ops.bim.load_project) is not available. Please install and enable Bonsai.")
             logger.error("Bonsai add-on is not available. Cannot load IFC.")
@@ -155,14 +173,18 @@ def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional
                 bpy.context.scene.BIMDrawingProperties.css_file = css_path
                 print(f"Ginnung: Wired stylesheet: {css_path}")
 
-            # Execute init_sidecars.py script block from .blend shell
-            if "init_sidecars.py" in bpy.data.texts:
+            # Execute init_sidecars.py script block from .blend shell if user enabled it
+            from .preferences import get_preferences
+            prefs = get_preferences()
+            can_exec = prefs and getattr(prefs, "execute_embedded_scripts", False)
+            if can_exec and "init_sidecars.py" in bpy.data.texts:
                 try:
                     script_src = bpy.data.texts["init_sidecars.py"].as_string()
                     exec(script_src, {"bpy": bpy, "__file__": target_ifc_path})
                     print("Ginnung: Executed embedded init_sidecars.py from .blend shell.")
                 except Exception as e:
                     print(f"Ginnung: Warning executing init_sidecars.py: {e}")
+                    logger.exception("Warning executing embedded init_sidecars.py")
 
             # 4. Remap imported materials to shell's master PBR materials
             remapped_count = 0
@@ -188,6 +210,7 @@ def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional
 
         except Exception as e:
             print(f"Ginnung Warning: Post-load setup error: {e}")
+            logger.exception("Post-load setup error")
 
         return None
 
@@ -195,7 +218,7 @@ def load_ifc(ifc_bytes: bytes, filename: str = "model.ifc", blend_path: Optional
     bpy.app.timers.register(do_load)
 
 
-def export_ifc(filename: str = "export.ifc") -> bytes:
+def export_ifc(filename: str = DEFAULT_EXPORT_IFC) -> bytes:
     """
     Export the current Blender scene to an IFC file via Bonsai.
     This must be called from the main thread (e.g. within an operator).
@@ -211,10 +234,9 @@ def export_ifc(filename: str = "export.ifc") -> bytes:
             if os.path.exists(temp_path):
                 with open(temp_path, "rb") as f:
                     return f.read()
-            else:
-                logger.error("Exported IFC file was not found.")
+            logger.error("Exported IFC file was not found.")
         except Exception as e:
-            logger.error(f"Bonsai export error: {e}")
+            logger.exception("Bonsai export error")
     else:
         logger.error("Bonsai add-on is not available. Cannot export IFC.")
 
