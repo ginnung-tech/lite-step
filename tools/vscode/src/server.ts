@@ -393,7 +393,7 @@ export class LiteStepServer {
   private _handleInlineFile(ws: WebSocket, id: string, filename: string, content: string, sizeBytes?: number): void {
     try {
       if (this._onFileReceived) {
-        void this._onFileReceived({
+        this._onFileReceived({
           id,
           filename,
           sizeBytes: sizeBytes || content.length,
@@ -454,7 +454,7 @@ export class LiteStepServer {
 
     if (this._onFileReceived) {
       try {
-        void this._onFileReceived({
+        this._onFileReceived({
           id: state.id,
           filename: state.filename,
           sizeBytes: state.sizeBytes,
