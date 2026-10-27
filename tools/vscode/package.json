@@ -1,0 +1,192 @@
+{
+  "name": "ginnung-vscode",
+  "displayName": "Ginnung",
+  "description": "IFC sync, Lite-STEP compilation, and 3D preview for Ginnung",
+  "version": "1.0.0",
+  "publisher": "ginnung",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ginnung-tech/lite-step.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ginnung-tech/lite-step/issues"
+  },
+  "homepage": "https://github.com/ginnung-tech/lite-step",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:python",
+    "workspaceContains:**/*.ifc"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ginnung.previewFile",
+        "title": "Preview Model",
+        "icon": "$(eye)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.startServer",
+        "title": "Start Server",
+        "icon": "$(radio-tower)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.stopServer",
+        "title": "Stop Server",
+        "icon": "$(debug-stop)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.pushToWeb",
+        "title": "Push Model to Web",
+        "icon": "$(cloud-upload)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.pushToBlender",
+        "title": "Push Model to Blender",
+        "icon": "$(symbol-misc)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.refresh",
+        "title": "Refresh Detection",
+        "icon": "$(refresh)",
+        "category": "Ginnung"
+      },
+      {
+        "command": "ginnung.refreshStatus",
+        "title": "Refresh Status",
+        "icon": "$(refresh)",
+        "category": "Ginnung"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ginnung-explorer",
+          "title": "Ginnung",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ginnung-explorer": [
+        {
+          "id": "ginnung.statusView",
+          "name": "Ginnung Bridge & Connections",
+          "type": "tree"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "ginnung.refreshStatus",
+          "when": "view == ginnung.statusView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ginnung.startServer",
+          "when": "view == ginnung.statusView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ginnung.stopServer",
+          "when": "view == ginnung.statusView",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "ginnung.previewFile",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ginnung.pushToWeb",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ginnung.pushToBlender",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ginnung.previewFile",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ginnung.pushToWeb",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ginnung.pushToBlender",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ginnung",
+      "properties": {
+        "ginnung.port": {
+          "type": "number",
+          "default": 9877,
+          "description": "WebSocket server port for Ginnung VS Code extension"
+        },
+        "ginnung.blenderPort": {
+          "type": "number",
+          "default": 9876,
+          "description": "WebSocket port of the Blender Ginnung server"
+        },
+        "ginnung.liteStepPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to the local lite-step repository containing the compiler"
+        },
+        "ginnung.liteStepCommand": {
+          "type": "string",
+          "default": "python -m lite_step",
+          "description": "Command to invoke the Lite-STEP compiler"
+        },
+        "ginnung.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the WebSocket server on activation"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}

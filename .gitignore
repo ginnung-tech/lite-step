@@ -20,3 +20,11 @@ styles/
 # Asset archives built from lite_step/assets/.
 /lite_step/assets/*.zip
 /lite_step/assets/*.ifczip
+
+# Tools build artifacts
+tools/vscode/node_modules/
+tools/vscode/out/
+tools/vscode/*.vsix
+tools/blender/__pycache__/
+tools/blender/*.zip
+
