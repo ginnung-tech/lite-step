@@ -1,13 +1,13 @@
 import bpy
 from .server import server_instance
 
-class VIEW3D_PT_GinnungPanel(bpy.types.Panel):
-    """Ginnung Integration Panel"""
-    bl_label = "Ginnung"
-    bl_idname = "VIEW3D_PT_ginnung_panel"
+class View3dLiteStepPanel(bpy.types.Panel):
+    """Lite-STEP Integration Panel"""
+    bl_label = "Lite-STEP"
+    bl_idname = "VIEW3D_PT_litestep_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Ginnung"
+    bl_category = "Lite-STEP"
 
     def draw(self, context):
         layout = self.layout
@@ -20,10 +20,10 @@ class VIEW3D_PT_GinnungPanel(bpy.types.Panel):
             box.label(text="Running", icon='PLAY')
             box.label(text=f"Port: {server_instance.port}")
             box.label(text=f"Clients: {len(server_instance.active_connections)}")
-            box.operator("ginnung.stop_server", icon='CANCEL')
+            box.operator("litestep.stop_server", icon='CANCEL')
         else:
             box.label(text="Stopped", icon='PAUSE')
-            box.operator("ginnung.start_server", icon='PLAY')
+            box.operator("litestep.start_server", icon='PLAY')
 
         # Receiver Status
         layout.separator()
@@ -31,7 +31,7 @@ class VIEW3D_PT_GinnungPanel(bpy.types.Panel):
         box.label(text="Model Synchronization:")
         if server_instance.is_running():
             box.label(text="Ready to receive IFC pushes", icon='IMPORT')
-            box.label(text="Push model from Ginnung / VS Code")
+            box.label(text="Push model from VS Code / CLI")
         else:
             box.label(text="Start server to receive models", icon='INFO')
 
@@ -53,7 +53,7 @@ class VIEW3D_PT_GinnungPanel(bpy.types.Panel):
                 box_shell.label(text="Template: None detected", icon='ERROR')
 
 classes = (
-    VIEW3D_PT_GinnungPanel,
+    View3dLiteStepPanel,
 )
 
 def register():

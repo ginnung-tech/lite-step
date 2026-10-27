@@ -1,15 +1,15 @@
 /**
- * TreeDataProvider for the Ginnung Activity Bar view container.
+ * TreeDataProvider for the Lite-STEP Activity Bar view container.
  *
  * Provides live server administration and real-time status indication for:
  * 1. VS Code Local WebSocket Server (ws://127.0.0.1:9877)
- * 2. Connected Web App clients
+ * 2. Connected Web clients
  * 3. Blender connection status probe (ws://127.0.0.1:9876)
  * 4. Quick push/preview actions
  */
 
 import * as vscode from "vscode";
-import { GinnungServer } from "../server";
+import { LiteStepServer } from "../server";
 import { probeBlenderConnection } from "../blender-client";
 
 export type TreeItemType =
@@ -23,7 +23,7 @@ export type TreeItemType =
   | "action-start-server"
   | "action-stop-server";
 
-export class GinnungTreeItem extends vscode.TreeItem {
+export class LiteStepTreeItem extends vscode.TreeItem {
   constructor(
     public readonly label: string,
     public readonly itemType: TreeItemType,
@@ -45,22 +45,22 @@ export class GinnungTreeItem extends vscode.TreeItem {
   }
 }
 
-export class GinnungSidebarProvider
-  implements vscode.TreeDataProvider<GinnungTreeItem>, vscode.Disposable
+type TreeDataChangeEvent = LiteStepTreeItem | undefined | null | void;
+
+export class LiteStepSidebarProvider
+  implements vscode.TreeDataProvider<LiteStepTreeItem>, vscode.Disposable
 {
-  private _onDidChangeTreeData: vscode.EventEmitter<
-    GinnungTreeItem | undefined | null | void
-  > = new vscode.EventEmitter<GinnungTreeItem | undefined | null | void>();
-  public readonly onDidChangeTreeData: vscode.Event<
-    GinnungTreeItem | undefined | null | void
-  > = this._onDidChangeTreeData.event;
+  private readonly _onDidChangeTreeData: vscode.EventEmitter<TreeDataChangeEvent> =
+    new vscode.EventEmitter<TreeDataChangeEvent>();
+  public readonly onDidChangeTreeData: vscode.Event<TreeDataChangeEvent> =
+    this._onDidChangeTreeData.event;
 
   private _blenderOnline: boolean = false;
   private _blenderChecking: boolean = false;
   private _probeTimer: ReturnType<typeof setInterval> | null = null;
   private _disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly server: GinnungServer) {
+  constructor(private readonly server: LiteStepServer) {
     // Listen to server status changes
     this._disposables.push(
       server.onDidChangeStatus(() => {
@@ -86,7 +86,7 @@ export class GinnungSidebarProvider
     this._blenderChecking = true;
 
     try {
-      const config = vscode.workspace.getConfiguration("ginnung");
+      const config = vscode.workspace.getConfiguration("litestep");
       const port = config.get<number>("blenderPort", 9876);
       const isOnline = await probeBlenderConnection(port, 1000);
       if (this._blenderOnline !== isOnline) {
@@ -100,30 +100,30 @@ export class GinnungSidebarProvider
     }
   }
 
-  getTreeItem(element: GinnungTreeItem): vscode.TreeItem {
+  getTreeItem(element: LiteStepTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(element?: GinnungTreeItem): GinnungTreeItem[] {
+  getChildren(element?: LiteStepTreeItem): LiteStepTreeItem[] {
     if (element) {
       return [];
     }
 
-    const items: GinnungTreeItem[] = [];
-    const config = vscode.workspace.getConfiguration("ginnung");
+    const items: LiteStepTreeItem[] = [];
+    const config = vscode.workspace.getConfiguration("litestep");
     const vscPort = this.server.port;
     const blenderPort = config.get<number>("blenderPort", 9876);
 
     // ── 1. VS Code Server Status ─────────────────────────────
     if (this.server.isRunning) {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "VS Code Server: Running",
           "server-status",
           vscode.TreeItemCollapsibleState.None,
           {
             description: `ws://127.0.0.1:${vscPort}`,
-            tooltip: `VS Code Ginnung WebSocket Server is ACTIVE on port ${vscPort}\nConnected Web Clients: ${this.server.clientCount}`,
+            tooltip: `VS Code Lite-STEP WebSocket Server is ACTIVE on port ${vscPort}\nConnected Web Clients: ${this.server.clientCount}`,
             iconPath: new vscode.ThemeIcon(
               "check",
               new vscode.ThemeColor("testing.iconPassed")
@@ -134,20 +134,20 @@ export class GinnungSidebarProvider
       );
     } else {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "VS Code Server: Stopped",
           "server-status",
           vscode.TreeItemCollapsibleState.None,
           {
             description: `Port ${vscPort}`,
-            tooltip: `VS Code Ginnung WebSocket Server is STOPPED. Click to start.`,
+            tooltip: `VS Code Lite-STEP WebSocket Server is STOPPED. Click to start.`,
             iconPath: new vscode.ThemeIcon(
               "circle-slash",
               new vscode.ThemeColor("testing.iconFailed")
             ),
             contextValue: "serverStopped",
             command: {
-              command: "ginnung.startServer",
+              command: "litestep.startServer",
               title: "Start Server",
             },
           }
@@ -159,13 +159,13 @@ export class GinnungSidebarProvider
     const webClients = this.server.clientCount;
     if (this.server.isRunning && webClients > 0) {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "Web App: Connected",
           "web-app-status",
           vscode.TreeItemCollapsibleState.None,
           {
             description: `${webClients} client${webClients > 1 ? "s" : ""} active`,
-            tooltip: `Ginnung Web App is connected and ready for pushes!`,
+            tooltip: `Web Client is connected and ready for pushes!`,
             iconPath: new vscode.ThemeIcon(
               "globe",
               new vscode.ThemeColor("charts.green")
@@ -176,7 +176,7 @@ export class GinnungSidebarProvider
       );
     } else {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "Web App: Disconnected",
           "web-app-status",
           vscode.TreeItemCollapsibleState.None,
@@ -185,7 +185,7 @@ export class GinnungSidebarProvider
               ? "Listening on ws://127.0.0.1:" + vscPort
               : "Server off",
             tooltip:
-              "No Ginnung web client currently connected. Open the web app and connect.",
+              "No web client currently connected. Open a client and connect.",
             iconPath: new vscode.ThemeIcon(
               "plug",
               new vscode.ThemeColor("disabledForeground")
@@ -199,13 +199,13 @@ export class GinnungSidebarProvider
     // ── 3. Blender Connection Indicator ────────────────────────
     if (this._blenderOnline) {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "Blender: Connected",
           "blender-status",
           vscode.TreeItemCollapsibleState.None,
           {
             description: `ws://127.0.0.1:${blenderPort}`,
-            tooltip: `Blender Ginnung server is ONLINE and ready to receive models!`,
+            tooltip: `Blender Lite-STEP server is ONLINE and ready to receive models!`,
             iconPath: new vscode.ThemeIcon(
               "symbol-misc",
               new vscode.ThemeColor("charts.green")
@@ -216,13 +216,13 @@ export class GinnungSidebarProvider
       );
     } else {
       items.push(
-        new GinnungTreeItem(
+        new LiteStepTreeItem(
           "Blender: Disconnected",
           "blender-status",
           vscode.TreeItemCollapsibleState.None,
           {
             description: `Port ${blenderPort} unreachable`,
-            tooltip: `Blender Ginnung server is OFFLINE. Make sure Blender is running and the Ginnung server is started.`,
+            tooltip: `Blender Lite-STEP server is OFFLINE. Make sure Blender is running and the Lite-STEP server is started.`,
             iconPath: new vscode.ThemeIcon(
               "symbol-misc",
               new vscode.ThemeColor("disabledForeground")
@@ -235,7 +235,7 @@ export class GinnungSidebarProvider
 
     // ── 4. Quick Actions ─────────────────────────────────────
     items.push(
-      new GinnungTreeItem(
+      new LiteStepTreeItem(
         "Push Model to Web App",
         "action-push-web",
         vscode.TreeItemCollapsibleState.None,
@@ -244,12 +244,12 @@ export class GinnungSidebarProvider
           tooltip: "Push active .py or .ifc model (or output.py / output.ifc) to connected Web App",
           iconPath: new vscode.ThemeIcon("cloud-upload"),
           command: {
-            command: "ginnung.pushToWeb",
+            command: "litestep.pushToWeb",
             title: "Push Model to Web App",
           },
         }
       ),
-      new GinnungTreeItem(
+      new LiteStepTreeItem(
         "Push Model to Blender",
         "action-push-blender",
         vscode.TreeItemCollapsibleState.None,
@@ -258,12 +258,12 @@ export class GinnungSidebarProvider
           tooltip: "Push active .py or .ifc model directly to Blender",
           iconPath: new vscode.ThemeIcon("run-all"),
           command: {
-            command: "ginnung.pushToBlender",
+            command: "litestep.pushToBlender",
             title: "Push Model to Blender",
           },
         }
       ),
-      new GinnungTreeItem(
+      new LiteStepTreeItem(
         "Preview Model in 3D",
         "action-preview",
         vscode.TreeItemCollapsibleState.None,
@@ -272,7 +272,7 @@ export class GinnungSidebarProvider
           tooltip: "Preview active .py or .ifc model in local 3D viewer",
           iconPath: new vscode.ThemeIcon("eye"),
           command: {
-            command: "ginnung.previewFile",
+            command: "litestep.previewFile",
             title: "Preview Model",
           },
         }

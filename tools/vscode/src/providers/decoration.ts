@@ -9,7 +9,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import { isLiteStepFile, clearCache } from "../detection";
 
-export class GinnungDecorationProvider
+export class LiteStepDecorationProvider
   implements vscode.FileDecorationProvider
 {
   private readonly _onDidChangeFileDecorations =

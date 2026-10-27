@@ -1,13 +1,11 @@
 bl_info = {
-    "name": "Ginnung",
-    "description": "Bridge web applications and Lite-STEP models to Blender via WebSocket and IFC (requires Bonsai)",
+    "name": "Lite-STEP Bridge",
+    "description": "Bridge Lite-STEP models to Blender via WebSocket and IFC (requires Bonsai)",
     "author": "Lite-STEP Contributors",
     "version": (1, 1, 0),
     "blender": (5, 0, 0),
-    "location": "View3D > N-Panel > Ginnung",
+    "location": "View3D > N-Panel > Lite-STEP",
     "warning": "Requires Bonsai (formerly BlenderBIM) add-on for IFC import/export",
-    "doc_url": "https://github.com/ginnung-tech/lite-step",
-    "tracker_url": "https://github.com/ginnung-tech/lite-step/issues",
     "category": "Import-Export",
 }
 
@@ -30,7 +28,7 @@ def register():
             server_instance.on_file_received = load_ifc
             server_instance.start(port=prefs.port, version="1.1")
     except Exception as e:
-        print(f"Ginnung: Failed to auto-start server - {e}")
+        print(f"Lite-STEP: Failed to auto-start server - {e}")
 
 def unregister():
     if server_instance.is_running():

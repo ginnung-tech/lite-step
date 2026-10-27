@@ -8,7 +8,7 @@
 import * as vscode from "vscode";
 import { isLiteStepFile } from "../detection";
 
-export class GinnungHoverProvider implements vscode.HoverProvider {
+export class LiteStepHoverProvider implements vscode.HoverProvider {
   provideHover(
     document: vscode.TextDocument,
     _position: vscode.Position
@@ -23,8 +23,8 @@ export class GinnungHoverProvider implements vscode.HoverProvider {
 
     const md = new vscode.MarkdownString(
       `**Lite-STEP Model** detected\n\n` +
-      `[$(eye) Preview Model](command:ginnung.previewFile "Compile and preview in 3D") · ` +
-      `[$(cloud-upload) Push to Web](command:ginnung.pushToWeb "Push to connected clients")`
+      `[$(eye) Preview Model](command:litestep.previewFile "Compile and preview in 3D") · ` +
+      `[$(cloud-upload) Push to Web](command:litestep.pushToWeb "Push to connected clients")`
     );
     md.isTrusted = true;
     md.supportThemeIcons = true;

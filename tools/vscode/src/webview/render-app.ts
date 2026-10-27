@@ -6,7 +6,7 @@
  *
  * This file exists as the esbuild webview entry point. In a future version,
  * the ThatOpen/web-ifc rendering stack can be bundled here for full IFC
- * parsing support (matching groa-worker/web_render/src/render-app.mjs).
+ * parsing support.
  */
 
 export {};

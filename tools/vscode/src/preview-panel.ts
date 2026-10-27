@@ -2,14 +2,14 @@
  * 3D Preview WebviewPanel manager.
  *
  * Manages a singleton WebviewPanel that renders IFC files using
- * ThatOpen Components + Web-IFC WASM (vendored from groa-worker/web_render).
+ * ThatOpen Components + Web-IFC WASM.
  */
 
 import * as vscode from "vscode";
 import * as crypto from "node:crypto";
 
 export class PreviewPanel {
-  public static readonly viewType = "ginnung.preview";
+  public static readonly viewType = "litestep.preview";
 
   private static _instance: PreviewPanel | undefined;
   private readonly _panel: vscode.WebviewPanel;
@@ -33,7 +33,7 @@ export class PreviewPanel {
 
     const panel = vscode.window.createWebviewPanel(
       PreviewPanel.viewType,
-      title || "Ginnung Preview",
+      title || "Lite-STEP Preview",
       column,
       {
         enableScripts: true,
@@ -79,7 +79,7 @@ export class PreviewPanel {
           break;
         case "error":
           vscode.window.showErrorMessage(
-            `Ginnung Preview: ${msg.message}`
+            `Lite-STEP Preview: ${msg.message}`
           );
           break;
       }
@@ -115,10 +115,6 @@ export class PreviewPanel {
     const webview = this._panel.webview;
     const nonce = getNonce();
 
-    const vendorUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, "out", "webview", "vendor")
-    );
-
     return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -131,7 +127,7 @@ export class PreviewPanel {
                  worker-src blob: ${webview.cspSource};
                  connect-src ${webview.cspSource} blob: data:;
                  img-src data: ${webview.cspSource};">
-  <title>Ginnung Preview</title>
+  <title>Lite-STEP Preview</title>
   <style nonce="${nonce}">
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e1e; font-family: system-ui, sans-serif; }

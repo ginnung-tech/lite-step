@@ -6,9 +6,9 @@ from .preferences import get_preferences
 
 logger = logging.getLogger(__name__)
 
-class GINNUNG_OT_StartServer(bpy.types.Operator):
-    """Start the Ginnung WebSocket server"""
-    bl_idname = "ginnung.start_server"
+class LiteStepStartServerOperator(bpy.types.Operator):
+    """Start the Lite-STEP WebSocket server"""
+    bl_idname = "litestep.start_server"
     bl_label = "Start Server"
 
     @classmethod
@@ -22,12 +22,12 @@ class GINNUNG_OT_StartServer(bpy.types.Operator):
         server_instance.on_file_received = load_ifc
         server_instance.start(port=port, version="1.1")
         
-        self.report({'INFO'}, f"Ginnung Server started on port {port}")
+        self.report({'INFO'}, f"Lite-STEP Server started on port {port}")
         return {'FINISHED'}
 
-class GINNUNG_OT_StopServer(bpy.types.Operator):
-    """Stop the Ginnung WebSocket server"""
-    bl_idname = "ginnung.stop_server"
+class LiteStepStopServerOperator(bpy.types.Operator):
+    """Stop the Lite-STEP WebSocket server"""
+    bl_idname = "litestep.stop_server"
     bl_label = "Stop Server"
 
     @classmethod
@@ -36,12 +36,12 @@ class GINNUNG_OT_StopServer(bpy.types.Operator):
 
     def execute(self, context):
         server_instance.stop()
-        self.report({'INFO'}, "Ginnung Server stopped")
+        self.report({'INFO'}, "Lite-STEP Server stopped")
         return {'FINISHED'}
 
 classes = (
-    GINNUNG_OT_StartServer,
-    GINNUNG_OT_StopServer,
+    LiteStepStartServerOperator,
+    LiteStepStopServerOperator,
 )
 
 def register():

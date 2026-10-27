@@ -45,7 +45,7 @@ function checkParentDirs(sourceFilePath: string): string | null {
  * Find the root directory of the local lite-step repository.
  */
 export function findLiteStepRepo(sourceFilePath?: string): string {
-  const config = vscode.workspace.getConfiguration("ginnung");
+  const config = vscode.workspace.getConfiguration("litestep");
   const configuredPath = config.get<string>("liteStepPath");
   if (configuredPath && fs.existsSync(configuredPath)) {
     return configuredPath;
@@ -81,7 +81,7 @@ export async function compileLiteStep(
   const baseName = path.basename(filePath, ".py");
   const startedAt = Date.now();
 
-  const config = vscode.workspace.getConfiguration("ginnung");
+  const config = vscode.workspace.getConfiguration("litestep");
   const pythonExecutable = config.get<string>("pythonPath") || "python";
 
   const env = {
@@ -163,6 +163,6 @@ export async function compileLiteStep(
 /**
  * Read the generated IFC file as a Buffer.
  */
-export async function readIfcFile(ifcPath: string): Promise<Buffer> {
+export function readIfcFile(ifcPath: string): Promise<Buffer> {
   return fs.promises.readFile(ifcPath);
 }

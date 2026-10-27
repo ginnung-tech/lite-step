@@ -27,4 +27,5 @@ tools/vscode/out/
 tools/vscode/*.vsix
 tools/blender/__pycache__/
 tools/blender/*.zip
+tools/*.zip
 

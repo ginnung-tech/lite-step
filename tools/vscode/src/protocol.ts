@@ -1,9 +1,9 @@
 /**
- * Wire protocol types and builders for the Ginnung WebSocket bridge.
+ * Wire protocol types and builders for the Lite-STEP WebSocket bridge.
  *
  * Exposes two-way file push/pull and document sync protocol:
- * - VS Code → Ginnung: Pushes raw .py or .ifc file.
- * - Ginnung → VS Code: Pushes raw .py or .ifc file (opened as new unsaved document in VS Code).
+ * - VS Code → Client: Pushes raw .py or .ifc file.
+ * - Client → VS Code: Pushes raw .py or .ifc file (opened as new unsaved document in VS Code).
  */
 
 export interface HelloMessage {
@@ -17,7 +17,7 @@ export interface PushMessage {
   type: "ifc.push" | "file.push";
   version: string;
   id: string;
-  direction: "to-blender" | "to-ginnung" | "to-vscode";
+  direction: "to-blender" | "to-client" | "to-vscode" | string;
   filename: string;
   fileType?: "python" | "ifc";
   content?: string;

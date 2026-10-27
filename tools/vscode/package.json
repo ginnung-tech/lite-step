@@ -1,18 +1,10 @@
 {
-  "name": "ginnung-vscode",
-  "displayName": "Ginnung",
-  "description": "IFC sync, Lite-STEP compilation, and 3D preview for Ginnung",
+  "name": "lite-step",
+  "displayName": "Lite-STEP",
+  "description": "IFC sync, Lite-STEP compilation, and 3D preview",
   "version": "1.0.0",
-  "publisher": "ginnung",
+  "publisher": "lite-step",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/ginnung-tech/lite-step.git"
-  },
-  "bugs": {
-    "url": "https://github.com/ginnung-tech/lite-step/issues"
-  },
-  "homepage": "https://github.com/ginnung-tech/lite-step",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -29,62 +21,62 @@
   "contributes": {
     "commands": [
       {
-        "command": "ginnung.previewFile",
+        "command": "litestep.previewFile",
         "title": "Preview Model",
         "icon": "$(eye)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.startServer",
+        "command": "litestep.startServer",
         "title": "Start Server",
         "icon": "$(radio-tower)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.stopServer",
+        "command": "litestep.stopServer",
         "title": "Stop Server",
         "icon": "$(debug-stop)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.pushToWeb",
+        "command": "litestep.pushToWeb",
         "title": "Push Model to Web",
         "icon": "$(cloud-upload)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.pushToBlender",
+        "command": "litestep.pushToBlender",
         "title": "Push Model to Blender",
         "icon": "$(symbol-misc)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.refresh",
+        "command": "litestep.refresh",
         "title": "Refresh Detection",
         "icon": "$(refresh)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       },
       {
-        "command": "ginnung.refreshStatus",
+        "command": "litestep.refreshStatus",
         "title": "Refresh Status",
         "icon": "$(refresh)",
-        "category": "Ginnung"
+        "category": "Lite-STEP"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "ginnung-explorer",
-          "title": "Ginnung",
+          "id": "litestep-explorer",
+          "title": "Lite-STEP",
           "icon": "media/icon.svg"
         }
       ]
     },
     "views": {
-      "ginnung-explorer": [
+      "litestep-explorer": [
         {
-          "id": "ginnung.statusView",
-          "name": "Ginnung Bridge & Connections",
+          "id": "litestep.statusView",
+          "name": "Lite-STEP Bridge & Connections",
           "type": "tree"
         }
       ]
@@ -92,90 +84,88 @@
     "menus": {
       "view/title": [
         {
-          "command": "ginnung.refreshStatus",
-          "when": "view == ginnung.statusView",
+          "command": "litestep.refreshStatus",
+          "when": "view == litestep.statusView",
           "group": "navigation@1"
         },
         {
-          "command": "ginnung.startServer",
-          "when": "view == ginnung.statusView",
+          "command": "litestep.startServer",
+          "when": "view == litestep.statusView",
           "group": "navigation@2"
         },
         {
-          "command": "ginnung.stopServer",
-          "when": "view == ginnung.statusView",
+          "command": "litestep.stopServer",
+          "when": "view == litestep.statusView",
           "group": "navigation@3"
         }
       ],
       "explorer/context": [
         {
-          "command": "ginnung.previewFile",
+          "command": "litestep.previewFile",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@1"
         },
         {
-          "command": "ginnung.pushToWeb",
+          "command": "litestep.pushToWeb",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@2"
         },
         {
-          "command": "ginnung.pushToBlender",
+          "command": "litestep.pushToBlender",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@3"
         }
       ],
       "editor/title": [
         {
-          "command": "ginnung.previewFile",
+          "command": "litestep.previewFile",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@1"
         },
         {
-          "command": "ginnung.pushToWeb",
+          "command": "litestep.pushToWeb",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@2"
         },
         {
-          "command": "ginnung.pushToBlender",
+          "command": "litestep.pushToBlender",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@3"
         }
       ]
     },
     "configuration": {
-      "title": "Ginnung",
+      "title": "Lite-STEP",
       "properties": {
-        "ginnung.port": {
+        "litestep.port": {
           "type": "number",
           "default": 9877,
-          "description": "WebSocket server port for Ginnung VS Code extension"
+          "description": "WebSocket server port for Lite-STEP VS Code extension"
         },
-        "ginnung.blenderPort": {
+        "litestep.blenderPort": {
           "type": "number",
           "default": 9876,
-          "description": "WebSocket port of the Blender Ginnung server"
+          "description": "WebSocket port of the Blender Lite-STEP server"
         },
-        "ginnung.liteStepPath": {
+        "litestep.liteStepPath": {
           "type": "string",
           "default": "",
           "description": "Optional path to the local lite-step repository containing the compiler"
         },
-        "ginnung.liteStepCommand": {
+        "litestep.liteStepCommand": {
           "type": "string",
           "default": "python -m lite_step",
           "description": "Command to invoke the Lite-STEP compiler"
         },
-        "ginnung.pythonPath": {
+        "litestep.pythonPath": {
           "type": "string",
           "default": "python",
           "description": "Path to Python executable to invoke for Lite-STEP compilation"
         },
-        "ginnung.allowedOrigins": {
+        "litestep.allowedOrigins": {
           "type": "array",
           "items": { "type": "string" },
           "default": [
-            "https://ginnung.tech",
-            "https://staging.grab.technology",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://localhost:5180",
@@ -184,7 +174,7 @@
           ],
           "description": "Allowed origins for incoming WebSocket connections"
         },
-        "ginnung.autoStartServer": {
+        "litestep.autoStartServer": {
           "type": "boolean",
           "default": true,
           "description": "Automatically start the WebSocket server on activation"

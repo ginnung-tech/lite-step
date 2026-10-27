@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
-id = "ginnung"
+id = "litestep_bridge"
 version = "1.1.0"
-name = "Ginnung"
+name = "Lite-STEP Bridge"
 tagline = "Bridge Lite-STEP models to Blender over WebSocket and IFC"
 maintainer = "Lite-STEP Contributors"
 type = "add-on"
@@ -9,9 +9,6 @@ blender_version_min = "5.0.0"
 license = [
     "SPDX:MIT",
 ]
-website = "https://github.com/ginnung-tech/lite-step"
-repository = "https://github.com/ginnung-tech/lite-step"
-tracker = "https://github.com/ginnung-tech/lite-step/issues"
 
 wheels = [
     "./wheels/websockets-16.1.1-py3-none-any.whl",

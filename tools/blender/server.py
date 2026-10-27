@@ -8,7 +8,7 @@ from .protocol import parse_message, build_hello, build_status, build_error, bui
 
 logger = logging.getLogger(__name__)
 
-class GinnungServer:
+class LiteStepServer:
     def __init__(self):
         self.host = '127.0.0.1'
         self.port = 9876
@@ -47,15 +47,15 @@ class GinnungServer:
                 origins=[None],
             ) as server:
                 self._server = server
-                print(f"Ginnung: Server listening on ws://{self.host}:{self.port}")
-                logger.info(f"Ginnung server listening on ws://{self.host}:{self.port}")
+                print(f"Lite-STEP: Server listening on ws://{self.host}:{self.port}")
+                logger.info(f"Lite-STEP server listening on ws://{self.host}:{self.port}")
                 await self._stop_event.wait()
 
         try:
             self._loop.run_until_complete(serve_async())
         except (asyncio.CancelledError, KeyboardInterrupt):
             pass
-        except Exception as e:
+        except Exception:
             logger.exception("Failed to start WebSocket server")
         finally:
             try:
@@ -80,7 +80,7 @@ class GinnungServer:
         self._server = None
         self._stop_event = None
         self.active_connections.clear()
-        logger.info("Ginnung server stopped.")
+        logger.info("Lite-STEP server stopped.")
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -95,7 +95,7 @@ class GinnungServer:
             await self._message_loop(websocket)
         except websockets.exceptions.ConnectionClosed:
             logger.info(f"Client disconnected: {websocket.remote_address}")
-        except Exception as e:
+        except Exception:
             logger.exception("WebSocket handler error")
         finally:
             self.active_connections.discard(websocket)
@@ -121,21 +121,20 @@ class GinnungServer:
         msg_id = data.get("id", "unknown")
         
         if msg_type in ("ifc.push", "file.push"):
-            direction = data.get("direction")
             filename = data.get("filename") or "import.ifc"
             content = data.get("content")
             blend_path = data.get("blendPath") or data.get("blend_path")
 
             if content:
                 # Protocol 1.1: Inline text content
-                print(f"Ginnung: Received inline model '{filename}' ({len(content)} chars)")
+                print(f"Lite-STEP: Received inline model '{filename}' ({len(content)} chars)")
                 if self.on_file_received:
                     try:
                         self.on_file_received(content.encode("utf-8"), filename, blend_path=blend_path)
                         await websocket.send(build_status(msg_id, "loaded"))
-                        print(f"Ginnung: Sent status ack 'loaded' for {msg_id}")
+                        print(f"Lite-STEP: Sent status ack 'loaded' for {msg_id}")
                     except Exception as e:
-                        print(f"Ginnung: Error loading received model: {e}")
+                        print(f"Lite-STEP: Error loading received model: {e}")
                         await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
             else:
                 # Protocol 1.0: Expect binary payload frame next
@@ -145,10 +144,10 @@ class GinnungServer:
                     "blend_path": blend_path,
                     "sizeBytes": data.get("sizeBytes", 0)
                 }
-                print(f"Ginnung: Prepared to receive binary IFC '{filename}' ({data.get('sizeBytes', 0)} bytes)")
+                print(f"Lite-STEP: Prepared to receive binary IFC '{filename}' ({data.get('sizeBytes', 0)} bytes)")
                 logger.info(f"Prepared to receive IFC '{filename}' ({data.get('sizeBytes')} bytes)")
         elif msg_type == "status":
-            print(f"Ginnung: Received status update for {msg_id}: {data.get('status')}")
+            print(f"Lite-STEP: Received status update for {msg_id}: {data.get('status')}")
             logger.info(f"Received status update for {msg_id}: {data.get('status')}")
 
     async def _handle_binary_message(self, websocket, msg: bytes) -> None:
@@ -157,21 +156,21 @@ class GinnungServer:
             filename = "output.ifc"
             msg_id = "binary-push"
             blend_path = None
-            print(f"Ginnung: Received binary frame ({len(msg)} bytes) without prior control header. Loading as {filename}...")
+            print(f"Lite-STEP: Received binary frame ({len(msg)} bytes) without prior control header. Loading as {filename}...")
         else:
             filename = state["filename"]
             msg_id = state["id"]
             blend_path = state.get("blend_path")
-            print(f"Ginnung: Received binary frame for '{filename}', size: {len(msg)} bytes.")
+            print(f"Lite-STEP: Received binary frame for '{filename}', size: {len(msg)} bytes.")
             logger.info(f"Received binary frame for '{filename}', size: {len(msg)} bytes.")
 
         if self.on_file_received:
             try:
                 self.on_file_received(msg, filename, blend_path=blend_path)
                 await websocket.send(build_status(msg_id, "loaded"))
-                print(f"Ginnung: Sent status ack 'loaded' for {msg_id}")
+                print(f"Lite-STEP: Sent status ack 'loaded' for {msg_id}")
             except Exception as e:
-                print(f"Ginnung: Error processing received IFC: {e}")
+                print(f"Lite-STEP: Error processing received IFC: {e}")
                 logger.exception("Error processing received IFC")
                 await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
 
@@ -184,17 +183,17 @@ class GinnungServer:
         async def _send() -> None:
             import uuid
             msg_id = str(uuid.uuid4())
-            push_msg = build_push(msg_id, "to-ginnung", filename, len(ifc_bytes))
+            push_msg = build_push(msg_id, "to-client", filename, len(ifc_bytes))
             
             for ws in self.active_connections.copy():
                 try:
                     await ws.send(push_msg)
                     await ws.send(ifc_bytes)
                     logger.info(f"Sent IFC '{filename}' to {ws.remote_address}")
-                except Exception as e:
+                except Exception:
                     logger.exception(f"Error sending to client {ws.remote_address}")
 
         asyncio.run_coroutine_threadsafe(_send(), self._loop)
 
 # Global singleton instance
-server_instance = GinnungServer()
+server_instance = LiteStepServer()

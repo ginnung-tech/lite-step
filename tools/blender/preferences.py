@@ -2,7 +2,7 @@ import bpy
 from bpy.types import AddonPreferences
 from bpy.props import IntProperty, BoolProperty, StringProperty
 
-class GinnungPreferences(AddonPreferences):
+class LiteStepPreferences(AddonPreferences):
     bl_idname = __package__
 
     port: IntProperty(
@@ -46,12 +46,12 @@ def get_preferences(context=None):
     if __package__ in addons:
         return addons[__package__].preferences
     for addon_name, addon in addons.items():
-        if addon_name.endswith("ginnung") or addon_name == "ginnung":
+        if "litestep" in addon_name.lower():
             return addon.preferences
     return None
 
 classes = (
-    GinnungPreferences,
+    LiteStepPreferences,
 )
 
 def register():

@@ -1,5 +1,5 @@
 /**
- * WebSocket server for Ginnung sync.
+ * WebSocket server for Lite-STEP sync.
  *
  * Runs on 127.0.0.1 (configurable port, default 9877).
  * Implements the file push/pull protocol:
@@ -24,9 +24,9 @@ export interface IncomingFile {
   data: Buffer;
 }
 
-export type OnFileReceived = (file: IncomingFile) => void;
+export type OnFileReceived = (file: IncomingFile) => void | Promise<void>;
 
-export class GinnungServer {
+export class LiteStepServer {
   private _wss: WebSocketServer | null = null;
   private readonly _clients: Set<WebSocket> = new Set();
   private _port: number;
@@ -75,10 +75,8 @@ export class GinnungServer {
       this._port = port;
     }
 
-    const config = vscode.workspace.getConfiguration("ginnung");
+    const config = vscode.workspace.getConfiguration("litestep");
     const allowedOrigins = config.get<string[]>("allowedOrigins", [
-      "https://ginnung.tech",
-      "https://staging.grab.technology",
       "http://localhost:5173",
       "http://127.0.0.1:5173",
       "http://localhost:5180",
@@ -101,12 +99,12 @@ export class GinnungServer {
 
     this._wss.on("error", (err) => {
       vscode.window.showErrorMessage(
-        `Ginnung server error: ${err.message}`
+        `Lite-STEP server error: ${err.message}`
       );
     });
 
     this._wss.on("listening", () => {
-      console.log(`[Ginnung] Server listening on ws://127.0.0.1:${this._port}`);
+      console.log(`[Lite-STEP] Server listening on ws://127.0.0.1:${this._port}`);
       this._updateStatusBar();
     });
   }
@@ -134,7 +132,7 @@ export class GinnungServer {
     this._wss.close();
     this._wss = null;
 
-    console.log("[Ginnung] Server stopped");
+    console.log("[Lite-STEP] Server stopped");
     this._updateStatusBar();
   }
 
@@ -161,10 +159,10 @@ export class GinnungServer {
       ifcFilename,
     };
 
-    console.log(`[Ginnung] Stored current model pair in server memory (batch: ${batchId}).`);
+    console.log(`[Lite-STEP] Stored current model pair in server memory (batch: ${batchId}).`);
 
     if (this._clients.size === 0) {
-      console.log("[Ginnung] No clients connected to push wipe command to.");
+      console.log("[Lite-STEP] No clients connected to push wipe command to.");
       return;
     }
 
@@ -172,7 +170,7 @@ export class GinnungServer {
       type: "file.push",
       version: "1.1",
       id: `wipe-${Date.now()}`,
-      direction: "to-ginnung",
+      direction: "to-client",
       filename: pyFilename,
       fileType: "python",
       command: "/delete:all",
@@ -182,9 +180,9 @@ export class GinnungServer {
     for (const ws of this._clients) {
       try {
         ws.send(wipeMsg);
-        console.log(`[Ginnung] Sent /delete:all wipe command to client.`);
+        console.log(`[Lite-STEP] Sent /delete:all wipe command to client.`);
       } catch (e) {
-        console.error(`[Ginnung] Failed to send wipe command: ${e}`);
+        console.error(`[Lite-STEP] Failed to send wipe command: ${e}`);
       }
     }
   }
@@ -192,7 +190,7 @@ export class GinnungServer {
   /** Send current stored model pair to a client */
   sendModelPairToClient(ws: WebSocket): void {
     if (!this._currentModel) {
-      console.log("[Ginnung] No stored model to send to client.");
+      console.log("[Lite-STEP] No stored model to send to client.");
       return;
     }
 
@@ -204,29 +202,29 @@ export class GinnungServer {
         type: "file.push",
         version: "1.1",
         id: `pair-py-${Date.now()}`,
-        direction: "to-ginnung",
+        direction: "to-client",
         filename: pyFilename,
         fileType: "python",
         content: pyContent,
         batchId,
       });
       ws.send(pyPush);
-      console.log(`[Ginnung] Sent Python model '${pyFilename}' to client.`);
+      console.log(`[Lite-STEP] Sent Python model '${pyFilename}' to client.`);
 
       const ifcPush = JSON.stringify({
         type: "file.push",
         version: "1.1",
         id: `pair-ifc-${Date.now()}`,
-        direction: "to-ginnung",
+        direction: "to-client",
         filename: ifcFilename,
         fileType: "ifc",
         content: ifcContent,
         batchId,
       });
       ws.send(ifcPush);
-      console.log(`[Ginnung] Sent IFC model '${ifcFilename}' to client.`);
+      console.log(`[Lite-STEP] Sent IFC model '${ifcFilename}' to client.`);
     } catch (e) {
-      console.error(`[Ginnung] Failed sending model pair to client: ${e}`);
+      console.error(`[Lite-STEP] Failed sending model pair to client: ${e}`);
     }
   }
 
@@ -273,7 +271,7 @@ export class GinnungServer {
         try {
           ws.send(text);
         } catch (e) {
-          console.error(`[Ginnung] Error sending to client: ${e}`);
+          console.error(`[Lite-STEP] Error sending to client: ${e}`);
         }
       }
     }
@@ -282,16 +280,16 @@ export class GinnungServer {
   /** Push an IFC file to all connected clients */
   pushIfc(ifcBytes: Buffer, filename: string = "model.ifc"): void {
     const id = `vsc-ifc-${Date.now()}`;
-    const pushMsg = buildPush(id, "to-ginnung", filename, ifcBytes.length);
+    const pushMsg = buildPush(id, "to-client", filename, ifcBytes.length);
 
     for (const ws of this._clients) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(pushMsg);
           ws.send(ifcBytes);
-          console.log(`[Ginnung] Pushed IFC '${filename}' (${ifcBytes.length} bytes)`);
+          console.log(`[Lite-STEP] Pushed IFC '${filename}' (${ifcBytes.length} bytes)`);
         } catch (e) {
-          console.error(`[Ginnung] Error pushing IFC: ${e}`);
+          console.error(`[Lite-STEP] Error pushing IFC: ${e}`);
         }
       }
     }
@@ -312,7 +310,7 @@ export class GinnungServer {
     const id = `vsc-file-${Date.now()}`;
     const pushMsg = buildPush(
       id,
-      "to-ginnung",
+      "to-client",
       filename,
       content.length,
       content,
@@ -321,21 +319,21 @@ export class GinnungServer {
 
     this._broadcast(pushMsg);
     console.log(
-      `[Ginnung] Pushed inline file '${filename}' (${content.length} chars)`
+      `[Lite-STEP] Pushed inline file '${filename}' (${content.length} chars)`
     );
   }
 
   private _handleConnection(ws: WebSocket): void {
     this._clients.add(ws);
     console.log(
-      `[Ginnung] Client connected. Total clients: ${this._clients.size}`
+      `[Lite-STEP] Client connected. Total clients: ${this._clients.size}`
     );
 
     // Send hello handshake
     try {
       ws.send(buildHello());
     } catch (e) {
-      console.error(`[Ginnung] Error sending hello: ${e}`);
+      console.error(`[Lite-STEP] Error sending hello: ${e}`);
     }
 
     // Ping/pong heartbeat
@@ -363,13 +361,13 @@ export class GinnungServer {
         this._heartbeatIntervals.delete(ws);
       }
       console.log(
-        `[Ginnung] Client disconnected. Total clients: ${this._clients.size}`
+        `[Lite-STEP] Client disconnected. Total clients: ${this._clients.size}`
       );
       this._updateStatusBar();
     });
 
     ws.on("error", (err) => {
-      console.error(`[Ginnung] Client error: ${err.message}`);
+      console.error(`[Lite-STEP] Client error: ${err.message}`);
     });
 
     this._updateStatusBar();
@@ -388,7 +386,7 @@ export class GinnungServer {
         filename,
         sizeBytes: msg.sizeBytes,
       });
-      console.log(`[Ginnung] Expecting file '${filename}' (${msg.sizeBytes} bytes)`);
+      console.log(`[Lite-STEP] Expecting file '${filename}' (${msg.sizeBytes} bytes)`);
     }
   }
 
@@ -404,16 +402,16 @@ export class GinnungServer {
       }
       ws.send(buildStatus(id, "loaded"));
     } catch (e) {
-      console.error(`[Ginnung] Error handling inline file: ${e}`);
+      console.error(`[Lite-STEP] Error handling inline file: ${e}`);
       ws.send(buildError(id, `Load failed: ${e}`));
     }
   }
 
   private _handleStatusMessage(ws: WebSocket, msg: ProtocolMessage & { type: "status" }): void {
-    console.log(`[Ginnung] Status for ${msg.id}: ${msg.status}`);
+    console.log(`[Lite-STEP] Status for ${msg.id}: ${msg.status}`);
     if (msg.status === "connected") {
       console.log(
-        `[Ginnung] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
+        `[Lite-STEP] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
       );
       this.sendModelPairToClient(ws);
     }
@@ -431,11 +429,11 @@ export class GinnungServer {
           this._handleStatusMessage(ws, msg);
           break;
         case "hello":
-          console.log("[Ginnung] Received hello-ack from client");
+          console.log("[Lite-STEP] Received hello-ack from client");
           break;
       }
     } catch (e) {
-      console.error(`[Ginnung] Error parsing message: ${e}`);
+      console.error(`[Lite-STEP] Error parsing message: ${e}`);
       ws.send(buildError(null, `Parse error: ${e}`));
     }
   }
@@ -444,14 +442,14 @@ export class GinnungServer {
     const state = this._incomingState.get(ws);
     if (!state) {
       console.warn(
-        "[Ginnung] Unexpected binary frame without prior control message"
+        "[Lite-STEP] Unexpected binary frame without prior control message"
       );
       return;
     }
     this._incomingState.delete(ws);
 
     console.log(
-      `[Ginnung] Received file '${state.filename}', ${data.length} bytes`
+      `[Lite-STEP] Received file '${state.filename}', ${data.length} bytes`
     );
 
     if (this._onFileReceived) {
@@ -464,7 +462,7 @@ export class GinnungServer {
         });
         ws.send(buildStatus(state.id, "loaded"));
       } catch (e) {
-        console.error(`[Ginnung] Error processing file: ${e}`);
+        console.error(`[Lite-STEP] Error processing file: ${e}`);
         ws.send(buildError(state.id, `Load failed: ${e}`));
       }
     }
@@ -474,15 +472,15 @@ export class GinnungServer {
     if (this._wss) {
       const count = this._clients.size;
       if (count > 0) {
-        this._statusBarItem.text = `$(check) Ginnung: ${count} client${count > 1 ? "s" : ""}`;
-        this._statusBarItem.tooltip = `Ginnung server running on port ${this._port} — ${count} connected`;
+        this._statusBarItem.text = `$(check) Lite-STEP: ${count} client${count > 1 ? "s" : ""}`;
+        this._statusBarItem.tooltip = `Lite-STEP server running on port ${this._port} — ${count} connected`;
       } else {
-        this._statusBarItem.text = `$(radio-tower) Ginnung: Listening`;
-        this._statusBarItem.tooltip = `Ginnung server listening on port ${this._port}`;
+        this._statusBarItem.text = `$(radio-tower) Lite-STEP: Listening`;
+        this._statusBarItem.tooltip = `Lite-STEP server listening on port ${this._port}`;
       }
     } else {
-      this._statusBarItem.text = `$(circle-slash) Ginnung: Off`;
-      this._statusBarItem.tooltip = "Ginnung server is not running";
+      this._statusBarItem.text = `$(circle-slash) Lite-STEP: Off`;
+      this._statusBarItem.tooltip = "Lite-STEP server is not running";
     }
     this._statusBarItem.show();
     this._onDidChangeStatus.fire();

@@ -10,7 +10,7 @@ export interface BlenderPushResult {
 }
 
 /**
- * Send an IFC file (raw buffer) to the running Blender Ginnung server.
+ * Send an IFC file (raw buffer) to the running Blender Lite-STEP server.
  *
  * @param ifcBytes - Buffer of the IFC model
  * @param filename - Name of the IFC file (e.g. model.ifc)
@@ -38,7 +38,7 @@ export async function pushIfcToBlender(
         }
         resolve({
           success: false,
-          message: `Timed out connecting to Blender on ws://127.0.0.1:${port}. Make sure Blender is running and the Ginnung server is started.`,
+          message: `Timed out connecting to Blender on ws://127.0.0.1:${port}. Make sure Blender is running and the Lite-STEP server is started.`,
         });
       }
     }, timeoutMs);
@@ -116,7 +116,7 @@ export async function pushIfcToBlender(
         clearTimeout(timeout);
         resolve({
           success: false,
-          message: `Could not connect to Blender (ws://127.0.0.1:${port}): ${err.message}. Please make sure Blender is open and the Ginnung server is started.`,
+          message: `Could not connect to Blender (ws://127.0.0.1:${port}): ${err.message}. Please make sure Blender is open and the Lite-STEP server is started.`,
         });
       }
     });
@@ -135,7 +135,7 @@ export async function pushIfcToBlender(
 }
 
 /**
- * Probes whether Blender's Ginnung WebSocket server is reachable and online.
+ * Probes whether Blender's Lite-STEP WebSocket server is reachable and online.
  *
  * @param port - Port to check (default: 9876)
  * @param timeoutMs - Probe timeout (default: 1200ms)

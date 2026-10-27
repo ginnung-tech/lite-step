@@ -20,7 +20,7 @@ VSCODE_DIR = os.path.join(TOOLS_DIR, "vscode")
 
 
 def build_blender():
-    zip_path = os.path.join(TOOLS_DIR, "blender-ginnung.zip")
+    zip_path = os.path.join(TOOLS_DIR, "blender-litestep.zip")
     print(f"\n[Blender] Building extension zip at: {zip_path}")
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -28,7 +28,7 @@ def build_blender():
             if "__pycache__" in root or ".pytest_cache" in root:
                 continue
             for file in files:
-                if file.endswith(".pyc") or file.endswith(".zip"):
+                if file.endswith((".pyc", ".zip")):
                     continue
                 abs_file = os.path.join(root, file)
                 rel_file = os.path.relpath(abs_file, BLENDER_DIR)

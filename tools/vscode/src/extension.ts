@@ -1,5 +1,5 @@
 /**
- * Ginnung VS Code Extension — main entry point.
+ * Lite-STEP VS Code Extension — main entry point.
  *
  * Provides:
  * 1. WebSocket server for push/pull sync (compatible with Blender add-on protocol)
@@ -12,70 +12,72 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { GinnungServer } from "./server";
+import { LiteStepServer } from "./server";
 import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
 import { isLiteStepFile, clearCache } from "./detection";
 import { buildDocumentSync } from "./protocol";
 import { PreviewPanel } from "./preview-panel";
 import { pushIfcToBlender } from "./blender-client";
-import { GinnungCodeLensProvider } from "./providers/codelens";
-import { GinnungHoverProvider } from "./providers/hover";
-import { GinnungDecorationProvider } from "./providers/decoration";
-import { GinnungSidebarProvider } from "./providers/sidebar-tree";
+import { LiteStepCodeLensProvider } from "./providers/codelens";
+import { LiteStepHoverProvider } from "./providers/hover";
+import { LiteStepDecorationProvider } from "./providers/decoration";
+import { LiteStepSidebarProvider } from "./providers/sidebar-tree";
 
-let server: GinnungServer;
+let server: LiteStepServer;
 let statusBarItem: vscode.StatusBarItem;
-let codeLensProvider: GinnungCodeLensProvider;
-let decorationProvider: GinnungDecorationProvider;
-let sidebarProvider: GinnungSidebarProvider;
+let codeLensProvider: LiteStepCodeLensProvider;
+let decorationProvider: LiteStepDecorationProvider;
+let sidebarProvider: LiteStepSidebarProvider;
 
 // ── Activation ─────────────────────────────────────────────
 
 export function activate(context: vscode.ExtensionContext) {
-  console.log("[Ginnung] Extension activating…");
+  console.log("[Lite-STEP] Extension activating…");
 
   // Status bar
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     100
   );
-  statusBarItem.command = "ginnung.startServer";
+  statusBarItem.command = "litestep.startServer";
 
   // Server
-  const config = vscode.workspace.getConfiguration("ginnung");
+  const config = vscode.workspace.getConfiguration("litestep");
   const port = config.get<number>("port", 9877);
-  server = new GinnungServer(statusBarItem, port);
+  server = new LiteStepServer(statusBarItem, port);
 
-  // Handle incoming files pushed from Ginnung web app → save in workspace root under ginnung-<timestamp>
-  server.onFileReceived = async (file) => {
-    try {
-      const rawFilename = file.filename || "output.py";
-      const filename = path.basename(rawFilename.replace(/\\/g, "/"));
-      const workspaceRoot = getWorkspaceRoot();
-      const folderName = getTimestampFolder();
-      const targetDir = path.join(workspaceRoot, folderName);
+  // Handle incoming files pushed from web app → save in workspace root under litestep-<timestamp>
+  server.onFileReceived = (file) => {
+    void (async () => {
+      try {
+        const rawFilename = file.filename || "output.py";
+        const filename = path.basename(rawFilename.replaceAll("\\", "/"));
+        const workspaceRoot = getWorkspaceRoot();
+        const folderName = getTimestampFolder();
+        const targetDir = path.join(workspaceRoot, folderName);
 
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+
+        const targetPath = path.join(targetDir, filename);
+        const resolvedTarget = path.resolve(targetPath);
+        const resolvedDir = path.resolve(targetDir);
+        if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
+          throw new Error(`Rejected unsafe filename '${file.filename}'`);
+        }
+        fs.writeFileSync(targetPath, file.data);
+
+        const doc = await vscode.workspace.openTextDocument(targetPath);
+        await vscode.window.showTextDocument(doc, { preview: false });
+
+        vscode.window.showInformationMessage(
+          `Lite-STEP: Saved and opened '${filename}' in '${folderName}'.`
+        );
+      } catch (e) {
+        vscode.window.showErrorMessage(`Failed to save pushed file in VS Code: ${e}`);
       }
-
-      const targetPath = path.join(targetDir, filename);
-      const resolvedTarget = path.resolve(targetPath);
-      const resolvedDir = path.resolve(targetDir);
-      if (!resolvedTarget.startsWith(resolvedDir + path.sep) && resolvedTarget !== resolvedDir) {
-        throw new Error(`Rejected unsafe filename '${file.filename}'`);
-      }
-      fs.writeFileSync(targetPath, file.data);
-
-      const doc = await vscode.workspace.openTextDocument(targetPath);
-      await vscode.window.showTextDocument(doc, { preview: false });
-
-      vscode.window.showInformationMessage(
-        `Ginnung: Saved and opened '${filename}' in '${folderName}'.`
-      );
-    } catch (e) {
-      vscode.window.showErrorMessage(`Failed to save pushed file in VS Code: ${e}`);
-    }
+    })();
   };
 
   // Auto-start by default
@@ -85,35 +87,35 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── Providers ──────────────────────────────────────────
 
-  sidebarProvider = new GinnungSidebarProvider(server);
-  codeLensProvider = new GinnungCodeLensProvider();
-  const hoverProvider = new GinnungHoverProvider();
-  decorationProvider = new GinnungDecorationProvider();
+  sidebarProvider = new LiteStepSidebarProvider(server);
+  codeLensProvider = new LiteStepCodeLensProvider();
+  const hoverProvider = new LiteStepHoverProvider();
+  decorationProvider = new LiteStepDecorationProvider();
 
   // ── Commands & Subscriptions ───────────────────────────
 
   context.subscriptions.push(
     statusBarItem,
     sidebarProvider,
-    vscode.commands.registerCommand("ginnung.startServer", () => {
+    vscode.commands.registerCommand("litestep.startServer", () => {
       if (server.isRunning) {
         vscode.window.showInformationMessage(
-          `Ginnung server already running on port ${server.port}`
+          `Lite-STEP server already running on port ${server.port}`
         );
         return;
       }
-      const cfg = vscode.workspace.getConfiguration("ginnung");
+      const cfg = vscode.workspace.getConfiguration("litestep");
       server.start(cfg.get<number>("port", 9877));
       vscode.window.showInformationMessage(
-        `Ginnung server started on port ${server.port}`
+        `Lite-STEP server started on port ${server.port}`
       );
     }),
-    vscode.commands.registerCommand("ginnung.stopServer", () => {
+    vscode.commands.registerCommand("litestep.stopServer", () => {
       server.stop();
-      vscode.window.showInformationMessage("Ginnung server stopped");
+      vscode.window.showInformationMessage("Lite-STEP server stopped");
     }),
     vscode.commands.registerCommand(
-      "ginnung.previewFile",
+      "litestep.previewFile",
       async (uri?: vscode.Uri) => {
         const filePath = resolveTargetFile(uri);
         if (!filePath) {
@@ -126,14 +128,14 @@ export function activate(context: vscode.ExtensionContext) {
       }
     ),
     vscode.commands.registerCommand(
-      "ginnung.pushToWeb",
+      "litestep.pushToWeb",
       async (uri?: vscode.Uri) => {
         if (!server.isRunning) {
-          vscode.window.showWarningMessage("Start the Ginnung server first");
+          vscode.window.showWarningMessage("Start the Lite-STEP server first");
           return;
         }
         if (server.clientCount === 0) {
-          vscode.window.showWarningMessage("No Ginnung clients connected");
+          vscode.window.showWarningMessage("No clients connected");
           return;
         }
         const filePath = resolveTargetFile(uri);
@@ -147,7 +149,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
     ),
     vscode.commands.registerCommand(
-      "ginnung.pushToBlender",
+      "litestep.pushToBlender",
       async (uri?: vscode.Uri) => {
         const filePath = resolveTargetFile(uri);
         if (!filePath) {
@@ -159,21 +161,21 @@ export function activate(context: vscode.ExtensionContext) {
         await pushFileToBlender(filePath);
       }
     ),
-    vscode.commands.registerCommand("ginnung.refresh", () => {
+    vscode.commands.registerCommand("litestep.refresh", () => {
       clearCache();
       codeLensProvider.refresh();
       decorationProvider.refresh();
       sidebarProvider.refresh();
       void sidebarProvider.probeBlender().catch(() => {});
       vscode.window.showInformationMessage(
-        "Ginnung: Detection cache and connection status refreshed"
+        "Lite-STEP: Detection cache and connection status refreshed"
       );
     }),
-    vscode.commands.registerCommand("ginnung.refreshStatus", async () => {
+    vscode.commands.registerCommand("litestep.refreshStatus", async () => {
       sidebarProvider.refresh();
       await sidebarProvider.probeBlender();
     }),
-    vscode.window.registerTreeDataProvider("ginnung.statusView", sidebarProvider),
+    vscode.window.registerTreeDataProvider("litestep.statusView", sidebarProvider),
     vscode.languages.registerCodeLensProvider(
       [
         { language: "python" },
@@ -214,7 +216,7 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  console.log("[Ginnung] Extension activated");
+  console.log("[Lite-STEP] Extension activated");
 }
 
 // ── Deactivation ───────────────────────────────────────────
@@ -223,7 +225,7 @@ export function deactivate() {
   if (server) {
     server.dispose();
   }
-  console.log("[Ginnung] Extension deactivated");
+  console.log("[Lite-STEP] Extension deactivated");
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -244,7 +246,7 @@ function getTimestampFolder(): string {
   const hours = pad(now.getHours());
   const minutes = pad(now.getMinutes());
   const seconds = pad(now.getSeconds());
-  return `ginnung-${year}${month}${day}-${hours}${minutes}${seconds}`;
+  return `litestep-${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
 function resolveTargetFile(uri?: vscode.Uri): string | undefined {
@@ -336,7 +338,7 @@ async function pushFileToWeb(filePath: string): Promise<void> {
         server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
 
         vscode.window.showInformationMessage(
-          `Ginnung: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
+          `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
         );
       }
     );
@@ -360,7 +362,7 @@ async function pushFileToWeb(filePath: string): Promise<void> {
     server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
 
     vscode.window.showInformationMessage(
-      `Ginnung: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
+      `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
     );
   }
 }
@@ -382,7 +384,7 @@ function findBlendPath(filePath: string): string | undefined {
 }
 
 async function pushFileToBlender(filePath: string): Promise<void> {
-  const config = vscode.workspace.getConfiguration("ginnung");
+  const config = vscode.workspace.getConfiguration("litestep");
   const port = config.get<number>("blenderPort", 9876);
   const ext = path.extname(filePath).toLowerCase();
   const baseName = path.basename(filePath);
@@ -399,9 +401,9 @@ async function pushFileToBlender(filePath: string): Promise<void> {
       async () => {
         const result = await pushIfcToBlender(buffer, baseName, port, 10000, blendPath);
         if (result.success) {
-          vscode.window.showInformationMessage(`Ginnung: ${result.message}`);
+          vscode.window.showInformationMessage(`Lite-STEP: ${result.message}`);
         } else {
-          vscode.window.showErrorMessage(`Ginnung: ${result.message}`);
+          vscode.window.showErrorMessage(`Lite-STEP: ${result.message}`);
         }
       }
     );
@@ -428,9 +430,9 @@ async function pushFileToBlender(filePath: string): Promise<void> {
         const ifcName = `${path.basename(filePath, ".py")}.ifc`;
         const result = await pushIfcToBlender(ifcBuffer, ifcName, port, 10000, blendPath);
         if (result.success) {
-          vscode.window.showInformationMessage(`Ginnung: ${result.message}`);
+          vscode.window.showInformationMessage(`Lite-STEP: ${result.message}`);
         } else {
-          vscode.window.showErrorMessage(`Ginnung: ${result.message}`);
+          vscode.window.showErrorMessage(`Lite-STEP: ${result.message}`);
         }
       }
     );
