@@ -1,0 +1,202 @@
+{
+  "name": "lite-step",
+  "displayName": "Lite-STEP",
+  "description": "IFC sync, Lite-STEP compilation, and 3D preview",
+  "version": "1.0.0",
+  "publisher": "lite-step",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:python",
+    "workspaceContains:**/*.ifc"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "litestep.previewFile",
+        "title": "Preview Model",
+        "icon": "$(eye)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.startServer",
+        "title": "Start Server",
+        "icon": "$(radio-tower)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.stopServer",
+        "title": "Stop Server",
+        "icon": "$(debug-stop)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.pushToWeb",
+        "title": "Push Model to Web",
+        "icon": "$(cloud-upload)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.pushToBlender",
+        "title": "Push Model to Blender",
+        "icon": "$(symbol-misc)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.refresh",
+        "title": "Refresh Detection",
+        "icon": "$(refresh)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.refreshStatus",
+        "title": "Refresh Status",
+        "icon": "$(refresh)",
+        "category": "Lite-STEP"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "litestep-explorer",
+          "title": "Lite-STEP",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "litestep-explorer": [
+        {
+          "id": "litestep.statusView",
+          "name": "Lite-STEP Bridge & Connections",
+          "type": "tree"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "litestep.refreshStatus",
+          "when": "view == litestep.statusView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "litestep.startServer",
+          "when": "view == litestep.statusView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "litestep.stopServer",
+          "when": "view == litestep.statusView",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "litestep.previewFile",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "litestep.pushToWeb",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "litestep.pushToBlender",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "litestep.previewFile",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "litestep.pushToWeb",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "litestep.pushToBlender",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Lite-STEP",
+      "properties": {
+        "litestep.port": {
+          "type": "number",
+          "default": 9877,
+          "description": "WebSocket server port for Lite-STEP VS Code extension"
+        },
+        "litestep.blenderPort": {
+          "type": "number",
+          "default": 9876,
+          "description": "WebSocket port of the Blender Lite-STEP server"
+        },
+        "litestep.liteStepPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to the local lite-step repository containing the compiler"
+        },
+        "litestep.liteStepCommand": {
+          "type": "string",
+          "default": "python -m lite_step",
+          "description": "Command to invoke the Lite-STEP compiler"
+        },
+        "litestep.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python executable to invoke for Lite-STEP compilation"
+        },
+        "litestep.allowedOrigins": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:5180",
+            "http://127.0.0.1:5180",
+            "vscode-webview://"
+          ],
+          "description": "Allowed origins for incoming WebSocket connections"
+        },
+        "litestep.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the WebSocket server on activation"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}

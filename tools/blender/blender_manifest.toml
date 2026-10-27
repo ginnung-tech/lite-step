@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+id = "litestep_bridge"
+version = "1.1.0"
+name = "Lite-STEP Bridge"
+tagline = "Bridge Lite-STEP models to Blender over WebSocket and IFC"
+maintainer = "Lite-STEP Contributors"
+type = "add-on"
+blender_version_min = "5.0.0"
+license = [
+    "SPDX:MIT",
+]
+
+wheels = [
+    "./wheels/websockets-16.1.1-py3-none-any.whl",
+]
+
+[permissions]
+network = "Host the local WebSocket server for client communication"
+files = "Import and export IFC files via Bonsai"

@@ -94,6 +94,12 @@ Running your own models, this does not matter. Running someone else's, install
 hooks via `set_sandbox()` and set `LITE_STEP_REQUIRE_SANDBOX=1` so an empty seat
 is a loud refusal rather than unguarded execution.
 
+## Tools & Extensions
+
+See [`tools/`](tools/) for editor and CAD tooling:
+- **VS Code Extension**: Compiler triggers, in-editor 3D Webview preview, and live push sync.
+- **Blender Add-on**: WebSocket bridge syncing IFC models into Blender 5.0+ with Bonsai and presentation PBR rendering.
+
 ## Agents
 
 [`AGENTS.md`](AGENTS.md) is the working guide for coding agents — where the
