@@ -1176,6 +1176,10 @@ def _carve_solid_host(host, occupant) -> None:
     # a distinct object, still renders) and clears the name so the cut tool is
     # anonymous.
     cut = occupant.model_copy(deep=True, update={"name": None})
+    # Tagged so the generator can tell an inferred carve from an authored
+    # operand: one that builds no solid is a compile error, not a warning,
+    # because the carve report below already lists it.
+    cut._carve_pair = (_carve_label(host), _carve_label(occupant))
     host._cuts.append(cut)
     logger.info("displacement: solid host %r carved by %r",
                 getattr(host, "ifc_name", None) or type(host).__name__,
@@ -1269,14 +1273,13 @@ def _void_operand(prism):
     """A boolean operand shaped exactly like ``prism``, or ``None``.
 
     ``None`` on a SKEW host — see :func:`_carve_one_host`, which turns it into
-    a named warning. The boolean-operand vocabulary is closed
-    (``generator._create_hole_solid_local``: box-mode ``Box``, ``Revolve``,
-    ``Pipe``/``Bar``, path-form ``Sweep``), and none of those expresses a
-    rotated rectangular prism. A ``Box`` around a skew void would carve the
-    void's BOUNDING box — a hole wider than the window, in the one direction
-    nobody looks at — so the skew case is refused out loud rather than
-    approximated. Every wall in the corpus is orthogonal; a contour-``Extrude``
-    operand is the fix when one is not.
+    a named warning. A ``Box`` is axis-aligned, so a ``Box`` around a skew
+    void would carve the void's BOUNDING box — a hole wider than the window,
+    in the one direction nobody looks at — and the skew case is refused out
+    loud rather than approximated. Every wall in the corpus is orthogonal. A
+    contour ``Extrude`` IS a boolean operand now
+    (``generator._create_hole_solid_local``), so a vertical-rectangle
+    ``Extrude`` is the fix when a skew wall turns up.
 
     Built under ``suspend_strict``: this runs post-normalize, so the
     coordinates are float METERS and int-mm validation would reject every one

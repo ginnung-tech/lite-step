@@ -690,6 +690,11 @@ class BimElement(BaseModel):
     #: `_carve` because it is what `displacement._walk` PRUNES on, one
     #: `getattr` per element on the hot pairing loop.
     _no_carve: bool = PrivateAttr(default=False)
+    #: ``(loser, winner)`` carve labels, set by displacement on the anonymous
+    #: copy it appends to a host's ``_cuts`` for an INFERRED carve. The
+    #: generator raises when such an operand builds no solid, and records the
+    #: pair as emitted when it does: the carve report promised that cut.
+    _carve_pair: Optional[tuple] = PrivateAttr(default=None)
     #: The ``carve=`` direction the ``.add()`` that placed this element
     #: declared, or ``None`` when it was omitted. ``None`` behaves as
     #: ``"other"`` — the distinction is kept because an UNDECLARED pair is
