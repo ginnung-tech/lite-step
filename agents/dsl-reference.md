@@ -331,6 +331,7 @@ A solid that swallows the whole mesh carves it to nothing, and says so at compil
 
 **Booleans consume their operands.** `.difference()` / `.union()` / `.intersection()` / `.clip()`: the receiver keeps its identity; the sculpt is invisible to schedules and quantities.
 An operand's own CUTS are refused at compile — never nest differences to fake `intersection`; use `.intersection()`. An operand's own `.union()` IS honoured: an arched doorway is `wall.difference(door.union(arch))`.
+Any solid cuts any solid, exactly, whatever either one's orientation: box `Box`, contour `Extrude`, `Pipe`, `Bar`, path `Sweep` and `Revolve` are all operands, on every host including a tilted contour `Extrude` and a contour `Wall` body. A `Mesh` is carved, never carves.
 
 **`.clip(origin=, normal=, overrun=)` removes the half-space the normal points at.**
 The plane is infinite — use it for an angled trim, a level cutoff, or lopping a corner, anywhere a finite cutter box would be noise. Chainable; multiple clips compose. Geometry queries read the AUTHORED shape, so a clip is not reflected in `height_at` / `raycast`.
@@ -501,7 +502,7 @@ Two flags work on the direct `python <model>.py` form only. They read `sys.argv`
 Two environment variables widen what a compile says. Each takes `all` for full detail, `0` for silence, anything else or unset for the default summary:
 
 - `LITESTEP_TREE_REPORT` — the container tree the compiler actually built: one row per element, indentation is containment, and the character before the label is the VERB (`@` for `.anchor()`, blank for `.add()`). This is how you catch a leaf that landed on the wrong container. The default collapses runs of identical siblings to `xN` and caps depth, always stating the `+N more` it dropped.
-- `LITESTEP_CARVE_REPORT` — default `carves: N pairs`; `all` prints one `carve: <loser> <- <winner>` per pair, sorted. A reordering that changes the joinery changes the count.
+- `LITESTEP_CARVE_REPORT` — default `carves: N pairs`; `all` prints one `carve: <loser> <- <winner>` per pair, sorted. A reordering that changes the joinery changes the count. After the IFC is written, `carve emission: planned=N emitted=M` says how many inferred carves the file really holds; an inferred carve whose cutter cannot be built fails the compile, naming the pair.
 
 `LITESTEP_EMIT_DRAWINGS` is a separate boolean, ON unless set to `0`: it emits the 2D drawing annotations alongside the IFC.
 

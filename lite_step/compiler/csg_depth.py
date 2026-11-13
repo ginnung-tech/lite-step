@@ -264,14 +264,16 @@ def _operand_width(operand) -> int:
 def _operand_emits(operand) -> bool:
     """Whether ``_create_operand_base_solid`` can realise this operand at all.
 
-    An operand it cannot build (a contour ``Extrude``, a ``Mesh``, a sectionless
-    ``Sweep``) emits NO boolean — it is warned about and skipped at build time.
-    Counting it here would over-predict depth, and an over-predicting metric
-    gets ignored just as fast as an under-predicting one.
+    An operand it cannot build (a ``Mesh``, a sectionless ``Sweep``, a contour
+    with fewer than 3 points) emits NO boolean — it is warned about and skipped
+    at build time. Counting it here would over-predict depth, and an
+    over-predicting metric gets ignored just as fast as an under-predicting one.
     """
     tname = type(operand).__name__
     if tname in ("Revolve", "Pipe", "Bar"):
         return True
+    if tname == "Extrude" and getattr(operand, "contour", None):
+        return _n(operand.contour) >= 3
     if tname == "Sweep" and _n(getattr(operand, "path", None)) >= 2:
         try:
             from lite_step.ifc.generator import _resolve_profile_section

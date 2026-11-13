@@ -936,6 +936,28 @@ def _report_carve_pairs(proj) -> None:
           file=sys.stderr)
 
 
+def _report_carves_emitted(proj) -> dict:
+    """``carve emission: planned=N emitted=M`` — inferred carves the file has.
+
+    ``planned`` is every inferred pair displacement recorded (the set the
+    ``carves:`` line above counts from); ``emitted`` is the subset whose
+    operand built a solid in this generation. They differ only when a host
+    never consumed its ``_cuts`` (an operand that fails to build raises
+    instead), and then the missing pairs are named. Silenced, like the carve
+    report, by ``LITESTEP_CARVE_REPORT=0``.
+    """
+    planned = {(lo, w) for lo, w, mech in (getattr(proj, "_carve_pairs", None) or [])
+               if mech == "inferred"}
+    emitted = planned & _CARVES_EMITTED
+    if os.environ.get("LITESTEP_CARVE_REPORT", "") != "0":
+        print(f"carve emission: planned={len(planned)} emitted={len(emitted)}",
+              file=sys.stderr)
+        for lo, w in sorted(planned - emitted):
+            print(f"warning: inferred carve {lo} <- {w} was planned but its "
+                  f"host emitted no boolean for it", file=sys.stderr)
+    return {"planned": len(planned), "emitted": len(emitted)}
+
+
 def _report_container_tree(proj) -> None:
     """Print the container tree this compile built.
 
@@ -1137,6 +1159,7 @@ def generate_ifc(
     assert run is not None
     assert np is not None
 
+    _CARVES_EMITTED.clear()
     try:
         # Create the output model on the pinned schema (IFC4X3_ADD2 —
         # see lite_step/ifc/schema_version.py; 4.3 semantic classes emit natively)
@@ -1686,6 +1709,7 @@ def generate_ifc(
         ifc_content, dedup_stats = deduplicate_ifc_step(
             ifc_content, drop_ids=cache.purged_ids)
         stats["dedup"] = dedup_stats
+        stats["carves"] = _report_carves_emitted(proj)
 
         return IFCGenerationResult(
             success=True,
@@ -1693,6 +1717,10 @@ def generate_ifc(
             stats=stats
         )
 
+    except DisplacementError as e:
+        # An inferred carve whose operand could not be built: the carve
+        # report promised it, so this is a compile error, named by the pair.
+        return IFCGenerationResult(success=False, error=str(e))
     except Exception as e:
         import traceback
         return IFCGenerationResult(
@@ -2105,7 +2133,7 @@ def _create_wall_contour(model, context, wall: Wall, body, cache: EntityCache):
         result_solid = _apply_contour_boolean_operations(
             model, base_solid, cuts, adds,
             centroid, x_axis, y_axis, z_axis, thickness_m, cache,
-            intersects=intersects, clips=clips,
+            contour_2d=contour_2d, intersects=intersects, clips=clips,
         )
         ifc_wall.Representation = _create_body_representation(
             model, context, result_solid)
@@ -5021,28 +5049,115 @@ def _apply_container_color(model, product, container_type: str, cache):
 
 
 
-def _create_hole_solid_local(model, hole: 'BimElement', parent_min: tuple, parent_center: tuple, cache: EntityCache, parent_max: tuple = None, is_cut: bool = True):
-    """
-    Create a boolean-operand solid positioned in local coordinates
-    (relative to the parent's center).
+@dataclass(frozen=True)
+class HostFrame:
+    """The frame a boolean operand is emitted in: the HOST's local frame.
 
-    Dispatches on the operand type (box Solid / rotated cutter / Pipe / Bar /
-    Revolve), then recursively applies the operand's OWN ``_cuts``/``_adds`` in
-    the same parent frame — so merged voids
+    ``origin`` is the host frame's origin in world metres; the rows of ``R``
+    are the host's local x, y, z axes in world (orthonormal, det = +1). A
+    world point ``p`` lands at ``R @ (p - origin)``.
+
+    Every operand builder decides its orientation on WORLD vectors (vertical
+    segment branch, revolve start direction, Newell normal) and only maps the
+    coordinates it emits through ``pt`` / ``dir``. That keeps the cutter the
+    same rigid solid as the element that renders, so the void it leaves is
+    exactly the occupant's shape whatever the host's orientation.
+    """
+    origin: Any
+    R: Any
+
+    def __post_init__(self):
+        object.__setattr__(self, "origin", np.asarray(self.origin, dtype=np.float64))
+        object.__setattr__(self, "R", np.asarray(self.R, dtype=np.float64))
+        object.__setattr__(self, "_is_tr", bool(np.array_equal(self.R, np.eye(3))))
+
+    @staticmethod
+    def translation(origin) -> "HostFrame":
+        """A frame that only shifts: the box host, the world-frame primitives."""
+        return HostFrame(origin, np.eye(3))
+
+    @property
+    def is_translation(self) -> bool:
+        return self._is_tr
+
+    @property
+    def is_axis_permutation(self) -> bool:
+        """Local axes are signed world axes, so a world box stays a box."""
+        a = np.abs(self.R)
+        return bool(np.allclose(a, np.round(a), atol=1e-9))
+
+    def pt(self, p) -> tuple:
+        # A translation skips the matrix product: `R @ v` with R = I turns a
+        # -0.0 into 0.0, and every byte of today's output must survive.
+        p = (float(p[0]), float(p[1]), float(p[2]))
+        o = self.origin
+        if self.is_translation:
+            return (p[0] - float(o[0]), p[1] - float(o[1]), p[2] - float(o[2]))
+        return tuple(float(v) for v in self.R @ (np.asarray(p) - o))
+
+    def dir(self, v) -> tuple:
+        if self.is_translation:
+            return (float(v[0]), float(v[1]), float(v[2]))
+        return tuple(float(x) for x in self.R @ np.asarray(v, dtype=np.float64))
+
+    def rows(self) -> tuple:
+        return tuple(self.R[i] for i in range(3))
+
+
+def _operand_label(op) -> str:
+    return getattr(op, "ifc_name", None) or "<anonymous>"
+
+
+#: Operand types ``_create_operand_base_solid`` can realise. The one list the
+#: unsupported-operand warning quotes, so the message cannot drift from the code.
+_SUPPORTED_OPERANDS = ("box-mode Box (start/end), contour Extrude, Pipe, Bar, "
+                       "path Sweep, Revolve")
+
+
+def _create_hole_solid_local(model, hole: 'BimElement', parent_min: tuple, parent_center: tuple, cache: EntityCache, parent_max: tuple = None, is_cut: bool = True, *, frame: Optional[HostFrame] = None):
+    """
+    Create a boolean-operand solid positioned in the host's local frame.
+
+    Dispatches on the operand type (box Solid / contour Extrude / Pipe / Bar /
+    path Sweep / Revolve), then recursively applies the operand's OWN
+    ``_cuts``/``_adds`` in the same host frame — so merged voids
     (``door_void.adds(arch_turn); wall.cuts(door_void)``) compile to a
     nested IfcBooleanResult operand.
 
-    Returns None (with a loud warning) for unsupported operand shapes.
+    ``frame`` is the host frame (:class:`HostFrame`). ``None`` means
+    ``HostFrame.translation(parent_center)``, the box host and the world-frame
+    primitives, and emits exactly what it always did.
 
+    ``parent_min`` / ``parent_max`` are the host's extent, used only to push a
+    box cutter's coplanar faces through the host. For a translation frame they
+    are in WORLD coordinates (the historical convention every such caller
+    uses); for a rotated frame they are in the host's LOCAL frame.
     ``parent_max`` defaults to the mirror of ``parent_min`` about
-    ``parent_center`` (the historical centered-box assumption); world-frame
-    callers (new v1.5 primitives, parent_center = origin) pass their real
-    AABB max explicitly.
+    ``parent_center`` (the historical centered-box assumption).
+
+    An operand that cannot be built returns None with a loud warning. An
+    operand that displacement INFERRED (it carries ``_carve_pair``) raises
+    :class:`~lite_step.compiler.displacement.DisplacementError` instead: the
+    carve report already promised that carve, so dropping it would be silent.
     """
+    if frame is None:
+        frame = HostFrame.translation(parent_center)
     base = _create_operand_base_solid(model, hole, parent_min, parent_center, cache,
-                                      parent_max=parent_max, is_cut=is_cut)
+                                      parent_max=parent_max, is_cut=is_cut,
+                                      frame=frame)
+    pair = getattr(hole, "_carve_pair", None)
     if base is None:
+        if pair is not None:
+            from lite_step.compiler.displacement import DisplacementError
+            raise DisplacementError(
+                f"inferred carve {pair[0]} <- {pair[1]} could not be emitted: "
+                f"the {type(hole).__name__} operand built no solid (supported "
+                f"operands: {_SUPPORTED_OPERANDS}). The carve report lists "
+                f"this pair, so the model would claim a cut the file does not "
+                f"have.")
         return None
+    if pair is not None:
+        _CARVES_EMITTED.add(pair)
 
     # Operand clips (spec-displacement-miter-clip, option b): a `.clip()`ed
     # element used as a boolean operand removes only its CLIPPED volume — the
@@ -5063,18 +5178,22 @@ def _create_hole_solid_local(model, hole: 'BimElement', parent_min: tuple, paren
                 "as an (unbounded) IfcHalfSpaceSolid cutter — clips skipped; "
                 "use a bounded operand to combine with .clip()",
                 getattr(hole, "ifc_name", None) or type(hole).__name__)
-        else:
+        elif frame.is_translation:
             base = _apply_clips(model, base, clips, center=parent_center)
+        else:
+            base = _apply_clips(model, base, clips, center=tuple(frame.origin),
+                                axes=frame.rows())
 
     return _apply_boolean_chain_ios(
         model, base,
         build=lambda sub, is_cut=True: _create_hole_solid_local(
-            model, sub, parent_min, parent_center, cache, parent_max=parent_max, is_cut=is_cut),
+            model, sub, parent_min, parent_center, cache, parent_max=parent_max,
+            is_cut=is_cut, frame=frame),
         cuts=(getattr(hole, '_cuts', None) or []),
         adds=(getattr(hole, '_adds', None) or []))
 
 
-def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, parent_center: tuple, cache: EntityCache, parent_max: tuple = None, is_cut: bool = True):
+def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, parent_center: tuple, cache: EntityCache, parent_max: tuple = None, is_cut: bool = True, *, frame: Optional[HostFrame] = None):
     """
     Create the base solid for a boolean operand, positioned in local
     coordinates (centered at parent origin).
@@ -5101,11 +5220,13 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
         a warning) if the operand shape is unsupported.
     """
 
+    if frame is None:
+        frame = HostFrame.translation(parent_center)
+
     # v1.5 primitives as operands (WS1 PR-E). Their geometry is authored in
-    # world coords; shift by -parent_center into the parent's local frame.
-    offset = (-parent_center[0], -parent_center[1], -parent_center[2])
+    # world coords and emitted through the host frame.
     if isinstance(hole, Revolve):
-        return _create_revolved_solid(model, hole, cache, offset=offset)
+        return _create_revolved_solid(model, hole, cache, frame=frame)
     if isinstance(hole, (Pipe, Bar)):
         # Boolean-safe cylinders, NOT IfcSweptDiskSolid — the geometry
         # kernel mis-tessellates boolean trees with swept-disk operands
@@ -5113,31 +5234,35 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
         radius = hole.radius if isinstance(hole, Pipe) else hole.diameter / 2.0
         fillet = hole.fillet_radius if isinstance(hole, Pipe) else hole.bend_radius
         return _create_disk_solid_boolean_safe(model, hole.path, radius, fillet,
-                                               cache, offset=offset)
+                                               cache, frame=frame)
 
     if isinstance(hole, Sweep) and getattr(hole, 'path', None):
-        # Path-form Sweep operand (a profile member as a carver): build the swept
-        # solid in the parent's local frame by offsetting the path centerline,
-        # then return the single solid (a multi-item composite section unions
-        # into one). The section (Material(profile_mm=)) comes off the
-        # element, same as the standalone member. Without this a member could
-        # never be a `.add()`-with-carve operand.
-        ox, oy, oz = offset
-        local_path = [p.model_copy(update={'x': p.x + ox, 'y': p.y + oy, 'z': p.z + oz})
-                      for p in hole.path]
-        items, _hb = _profile_path_items(model, local_path, hole, cache)
+        # Path-form Sweep operand (a profile member as a carver): the swept
+        # solid in the host frame, unioned into one solid (a multi-item
+        # composite section unions into one). The section
+        # (Material(profile_mm=)) comes off the element, same as the
+        # standalone member. Without this a member could never be a
+        # `.add()`-with-carve operand.
+        items, _hb = _profile_path_items(model, hole.path, hole, cache, frame=frame)
         if not items:
             return None
         return _balanced_union_ios(model, items)
 
-    # Guard: contour-mode elements don't have start/end
+    if isinstance(hole, Extrude) and getattr(hole, "contour", None):
+        return _contour_extrude_operand(model, hole, frame)
+
+    # Guard: anything else without start/end cannot be read as a box.
     if not hasattr(hole, 'start') or hole.start is None or not hasattr(hole, 'end') or hole.end is None:
         logger.warning(
             "unsupported boolean operand %s %r skipped — operands must be "
-            "box-mode Solids (start/end), Revolve, Pipe, or Bar",
-            type(hole).__name__, getattr(hole, 'ifc_name', None) or '<anonymous>',
+            "one of: %s",
+            type(hole).__name__, _operand_label(hole), _SUPPORTED_OPERANDS,
         )
         return None
+
+    if not frame.is_translation:
+        return _box_operand_in_frame(model, hole, frame, parent_min, parent_max,
+                                     cache, is_cut)
 
     # Transform hole coordinates to IFC
     start_ifc = _dsl_to_ifc_point(hole.start.x, hole.start.y, hole.start.z)
@@ -5200,6 +5325,150 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
         Depth=height
     )
     return solid
+
+
+def _box_operand_in_frame(model, hole, frame: HostFrame, parent_min, parent_max,
+                          cache: EntityCache, is_cut: bool):
+    """A box-mode operand in a ROTATED host frame (a contour Extrude or Wall).
+
+    When the host's axes are signed world axes the box is still a box in the
+    host frame, so it is emitted axis-aligned there, and a cut's faces that are
+    coplanar with the host get pushed through it like on every other host.
+    Otherwise the box is emitted as an ORIENTED extrusion: same rigid solid,
+    placed with the frame's image of world Z and X. Taking the local AABB of
+    two mapped corners, as this used to, is a different and larger box as soon
+    as the host is tilted.
+    """
+    s = _dsl_to_ifc_point(hole.start.x, hole.start.y, hole.start.z)
+    e = _dsl_to_ifc_point(hole.end.x, hole.end.y, hole.end.z)
+    lo = [min(s[i], e[i]) for i in range(3)]
+    hi = [max(s[i], e[i]) for i in range(3)]
+
+    if frame.is_axis_permutation:
+        corners = [frame.pt((x, y, z)) for x in (lo[0], hi[0])
+                   for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+        cut_min = [min(c[i] for c in corners) for i in range(3)]
+        cut_max = [max(c[i] for c in corners) for i in range(3)]
+        if is_cut and parent_min is not None and parent_max is not None:
+            _extend_cut_for_boolean(cut_min, cut_max, parent_min, parent_max)
+        width = snap_to_precision(cut_max[0] - cut_min[0])
+        depth = snap_to_precision(cut_max[1] - cut_min[1])
+        height = snap_to_precision(cut_max[2] - cut_min[2])
+        if width < 0.001 or depth < 0.001 or height < 0.001:
+            return None
+        placement = model.create_entity(
+            "IfcAxis2Placement3D",
+            Location=cache.get_or_create_point(
+                [cut_min[0] + width / 2.0, cut_min[1] + depth / 2.0, cut_min[2]]))
+    else:
+        width = snap_to_precision(hi[0] - lo[0])
+        depth = snap_to_precision(hi[1] - lo[1])
+        height = snap_to_precision(hi[2] - lo[2])
+        if width < 0.001 or depth < 0.001 or height < 0.001:
+            return None
+        bottom = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, lo[2])
+        placement = model.create_entity(
+            "IfcAxis2Placement3D",
+            Location=cache.get_or_create_point(list(frame.pt(bottom))),
+            Axis=cache.get_or_create_direction(*frame.dir((0.0, 0.0, 1.0))),
+            RefDirection=cache.get_or_create_direction(*frame.dir((1.0, 0.0, 0.0))))
+    return model.create_entity(
+        "IfcExtrudedAreaSolid",
+        SweptArea=cache.get_or_create_rect_profile(x_dim=width, y_dim=depth),
+        Position=placement,
+        ExtrudedDirection=cache.get_z_up_direction(),
+        Depth=height)
+
+
+def _extrude_frame(elem):
+    """``(centroid, x_axis, y_axis, z_axis, contour_2d, thickness_m)`` of a
+    contour ``Extrude``, or ``None`` when it has fewer than 3 points.
+
+    THE single definition of a contour Extrude's frame: the element emitter
+    and the operand builder both read it, so the cutter is the same solid as
+    the element that renders. Newell normal with the orientation rule (a
+    sloped or flat surface points up; a vertical one keeps the author's
+    winding), origin at the centroid, local X from the Up-Preferred reference.
+    ``thickness_m`` may be ``None`` when the element has no thickness source.
+    """
+    thickness_m = elem.thickness
+    if thickness_m is None:
+        # v1.5 one-source rule: a sheet Material carries the thickness
+        # (Material(key=..., thickness_mm=...) replaces thickness=).
+        thickness_m = _material_thickness_m(elem)
+
+    contour_3d = [(pt.x, pt.y, pt.z) for pt in elem.contour]
+    if len(contour_3d) < 3:
+        return None
+
+    # Orientation rule keeps sloped/horizontal surfaces pointing up (Z-up
+    # convention) so an accidentally-CW-wound roof slope doesn't extrude
+    # downward through the ground. Vertical surfaces are not flipped.
+    normal = _apply_orientation_rules(_newell_normal(contour_3d))
+    centroid = _calculate_centroid(contour_3d)
+    z_axis = np.array(normal)
+
+    # Reference vector, "Up-Preferred" strategy (Z-up).
+    if abs(z_axis[2]) > 0.9:
+        ref = np.array([1.0, 0.0, 0.0])
+    else:
+        ref = np.array([0.0, 0.0, 1.0])
+    x_axis = np.cross(ref, z_axis)
+    x_norm = np.linalg.norm(x_axis)
+    if x_norm < 0.001:
+        x_axis = np.array([1.0, 0.0, 0.0])
+    else:
+        x_axis = x_axis / x_norm
+    y_axis = np.cross(z_axis, x_axis)
+
+    contour_2d = []
+    for pt in contour_3d:
+        v = np.array([pt[0] - centroid[0], pt[1] - centroid[1], pt[2] - centroid[2]])
+        # +y_axis matches the placement's reconstructed local Y; negating it
+        # would mirror the profile.
+        contour_2d.append((float(np.dot(v, x_axis)), float(np.dot(v, y_axis))))
+    return centroid, x_axis, y_axis, z_axis, contour_2d, thickness_m
+
+
+def _contour_extrude_operand(model, elem, frame: HostFrame):
+    """A contour ``Extrude`` as a boolean operand, in the host frame.
+
+    The element's own profile and extrusion, with the placement mapped through
+    the frame: same profile, same depth, so the void is the occupant's shape.
+    """
+    ef = _extrude_frame(elem)
+    if ef is None or not ef[5] or ef[5] <= 0:
+        logger.warning(
+            "unsupported boolean operand Extrude %r skipped — it has %s",
+            _operand_label(elem),
+            "fewer than 3 contour points" if ef is None else "no thickness")
+        return None
+    centroid, x_axis, _y_axis, z_axis, contour_2d, thickness_m = ef
+    points = [model.create_entity("IfcCartesianPoint", Coordinates=[p[0], p[1]])
+              for p in contour_2d]
+    points.append(points[0])
+    profile = model.create_entity(
+        "IfcArbitraryClosedProfileDef", ProfileType="AREA",
+        OuterCurve=model.create_entity("IfcPolyline", Points=points))
+    position = model.create_entity(
+        "IfcAxis2Placement3D",
+        Location=model.create_entity("IfcCartesianPoint",
+                                     Coordinates=list(frame.pt(centroid))),
+        Axis=model.create_entity("IfcDirection",
+                                 DirectionRatios=list(frame.dir(z_axis))),
+        RefDirection=model.create_entity("IfcDirection",
+                                         DirectionRatios=list(frame.dir(x_axis))))
+    return model.create_entity(
+        "IfcExtrudedAreaSolid", SweptArea=profile, Position=position,
+        ExtrudedDirection=model.create_entity("IfcDirection",
+                                              DirectionRatios=[0.0, 0.0, 1.0]),
+        Depth=float(thickness_m))
+
+
+#: ``(loser, winner)`` labels of every inferred carve whose operand built a
+#: solid during the current ``generate_ifc``. Reset at the start of each
+#: generation; read by ``_report_carves_emitted``.
+_CARVES_EMITTED: set = set()
 
 
 def _create_body_representation(model, context, solid):
@@ -5455,39 +5724,54 @@ def _mesh_is_where_it_should_be(elem, verts) -> bool:
 def _apply_contour_boolean_operations(model, base_solid, cuts: list, adds: list,
                                       centroid: tuple, x_axis, y_axis, z_axis,
                                       thickness_m: float, cache: EntityCache,
+                                      contour_2d: list = None,
                                       intersects: list = None,
                                       clips: list = None):
     """
-    Apply boolean operations to a contour-extruded solid, with cuts/adds
-    transformed to the contour's local coords.
+    Apply boolean operations to a contour-extruded solid, with every operand
+    built in the contour's local frame.
 
-    The contour's local coordinate system:
+    The contour's local coordinate system (see ``_extrude_frame``):
     - Origin: centroid of the contour
     - X-axis: computed from normal using Up-Preferred strategy
-    - Y-axis: cross(Z, X) with Y-negation for winding orientation
+    - Y-axis: cross(Z, X)
     - Z-axis: normal (extrusion direction)
+
+    Operands go through the same builder every other host uses
+    (``_create_hole_solid_local``) with that frame as a :class:`HostFrame`, so a
+    contour host can be cut by anything any other host can: box Solids,
+    contour Extrudes, Pipes, Bars, path Sweeps and Revolves.
 
     Args:
         model: ifcopenshell model
         base_solid: The base IfcExtrudedAreaSolid for the contour element
-        cuts: List of box-mode Solid operands to subtract
-        adds: List of box-mode Solid operands to add
-        centroid: (x, y, z) centroid in DSL coordinates
-        x_axis: numpy array, local X axis in DSL coords
-        y_axis: numpy array, local Y axis in DSL coords
-        z_axis: numpy array, local Z axis (normal) in DSL coords
+        cuts / adds / intersects: operands
+        centroid: (x, y, z) centroid in world metres
+        x_axis, y_axis, z_axis: numpy arrays, the local axes in world
         thickness_m: Contour extrusion thickness in meters
         cache: EntityCache for deduplication
+        contour_2d: the local 2D contour; with ``thickness_m`` it bounds the
+            host for the coplanar-face extension of box cutters
 
     Returns:
         Final solid (IfcBooleanResult or original)
     """
     assert np is not None
 
+    frame = HostFrame(np.asarray(centroid, dtype=np.float64),
+                      np.vstack([x_axis, y_axis, z_axis]))
+    local_min = local_max = None
+    if contour_2d and thickness_m:
+        xs = [p[0] for p in contour_2d]
+        ys = [p[1] for p in contour_2d]
+        local_min = (min(xs), min(ys), min(0.0, float(thickness_m)))
+        local_max = (max(xs), max(ys), max(0.0, float(thickness_m)))
+
     result = _apply_boolean_chain_ios(
         model, base_solid,
-        build=lambda op: _create_contour_cut_solid(
-            model, op, centroid, x_axis, y_axis, z_axis, cache),
+        build=lambda op, is_cut=True: _create_hole_solid_local(
+            model, op, local_min, tuple(frame.origin), cache,
+            parent_max=local_max, is_cut=is_cut, frame=frame),
         cuts=cuts, adds=adds, intersects=intersects)
 
     # .clip() half-spaces — projected into the same contour-local frame.
@@ -5495,120 +5779,6 @@ def _apply_contour_boolean_operations(model, base_solid, cuts: list, adds: list,
                           center=centroid, axes=(x_axis, y_axis, z_axis))
 
     return result
-
-
-def _create_contour_cut_solid(model, operand, centroid: tuple,
-                              x_axis, y_axis, z_axis, cache: EntityCache):
-    """
-    Create a boolean-operand box solid in the contour's local coordinate system.
-
-    Transforms a box-mode Solid operand (start/end corners) from global DSL
-    coordinates to the contour element's local coordinate system for use in
-    boolean operations.
-
-    Args:
-        model: ifcopenshell model
-        operand: box-mode Solid operand, coordinates in meters (after normalization)
-        centroid: (x, y, z) contour centroid in DSL coordinates
-        x_axis, y_axis, z_axis: numpy arrays defining the contour's local axes in DSL
-        cache: EntityCache for deduplication
-
-    Returns:
-        IfcExtrudedAreaSolid in the contour's local coords, or None if degenerate
-    """
-    assert np is not None
-
-    # Same condition, same answer as the box-mode path (`_create_cut_solid`'s
-    # guard ~400 lines up): an operand without start/end is not a box-mode
-    # Solid and cannot be read as one. That path warns and returns None, which
-    # `apply_boolean_chain` treats as "skip this operand"; this one read
-    # `operand.start.x` unconditionally and died with
-    # `AttributeError: 'Extrude' object has no attribute 'start'`.
-    #
-    # Reached whenever two contour-mode solids end up overlapping and
-    # displacement infers a carve between them — and an anchored child cannot
-    # dodge it the usual way, because `.anchor()` and `placement=` are mutually
-    # exclusive by construction, so the "give it an identity placement" escape
-    # hatch is unavailable. Found by the 5-link anchor chain in
-    # scenario_b2_real_anchor_chain.py.
-    if (getattr(operand, "start", None) is None
-            or getattr(operand, "end", None) is None):
-        logger.warning(
-            "unsupported boolean operand %s %r skipped — operands must be "
-            "box-mode Solids (start/end), Revolve, Pipe, or Bar",
-            type(operand).__name__,
-            getattr(operand, 'ifc_name', None) or '<anonymous>',
-        )
-        return None
-
-    # Get operand corners in DSL space (already in meters)
-    start_dsl = np.array([operand.start.x, operand.start.y, operand.start.z])
-    end_dsl = np.array([operand.end.x, operand.end.y, operand.end.z])
-
-    # Normalize corners in global space first
-    min_dsl = np.minimum(start_dsl, end_dsl)
-    max_dsl = np.maximum(start_dsl, end_dsl)
-
-    # Transform corners to the contour's local coordinate system
-    centroid_arr = np.array(centroid)
-
-    def to_local(pt_dsl):
-        """Transform a point from global DSL to the contour's local coords."""
-        v = pt_dsl - centroid_arr
-        local_x = float(np.dot(v, x_axis))
-        # +y_axis, kept in lockstep with the contour projection above so the
-        # cut solid lands in the same (un-mirrored) local frame as the profile.
-        local_y = float(np.dot(v, y_axis))
-        local_z = float(np.dot(v, z_axis))
-        return (local_x, local_y, local_z)
-
-    min_local = to_local(min_dsl)
-    max_local = to_local(max_dsl)
-
-    # Re-normalize in local space (transformation may swap min/max)
-    final_min = (
-        min(min_local[0], max_local[0]),
-        min(min_local[1], max_local[1]),
-        min(min_local[2], max_local[2])
-    )
-    final_max = (
-        max(min_local[0], max_local[0]),
-        max(min_local[1], max_local[1]),
-        max(min_local[2], max_local[2])
-    )
-
-    # Calculate dimensions in local space
-    width = snap_to_precision(final_max[0] - final_min[0])
-    depth = snap_to_precision(final_max[1] - final_min[1])
-    height = snap_to_precision(final_max[2] - final_min[2])
-
-    if width < 0.001 or depth < 0.001 or height < 0.001:
-        return None
-
-    # Create solid at local position, offset by half dimensions to account for centered profile
-    # IfcRectangleProfileDef centers the rectangle at its position
-    position = cache.get_or_create_point(
-        [final_min[0] + width / 2.0, final_min[1] + depth / 2.0, final_min[2]]
-    )
-
-    placement = model.create_entity(
-        "IfcAxis2Placement3D",
-        Location=position
-    )
-
-    profile = cache.get_or_create_rect_profile(x_dim=width, y_dim=depth)
-
-    extrusion_dir = cache.get_z_up_direction()
-
-    solid = model.create_entity(
-        "IfcExtrudedAreaSolid",
-        SweptArea=profile,
-        Position=placement,
-        ExtrudedDirection=extrusion_dir,
-        Depth=height
-    )
-
-    return solid
 
 
 # =============================================================================
@@ -5779,55 +5949,12 @@ def _create_extrude(model, context, elem: 'Extrude', cache: EntityCache):
     assert run is not None
     assert np is not None
 
-    thickness_m = elem.thickness
-    if thickness_m is None:
-        # v1.5 one-source rule: a sheet Material carries the thickness
-        # (Material(key=..., thickness_mm=...) replaces thickness=).
-        thickness_m = _material_thickness_m(elem)
-
-    # Extract 3D contour points (already in meters from executor)
-    contour_3d = [(pt.x, pt.y, pt.z) for pt in elem.contour]
-
-    if len(contour_3d) < 3:
+    # Newell plane frame + local 2D contour: one definition, shared with the
+    # operand builder (contour points already in meters from the executor).
+    ef = _extrude_frame(elem)
+    if ef is None:
         return None
-
-    # Calculate plane normal using Newell's Method; orientation-rule keeps
-    # sloped/horizontal surfaces pointing up (Z-up convention) so an
-    # accidentally-CW-wound roof slope doesn't extrude downward through
-    # the ground. Vertical surfaces (|nz| < epsilon) are not flipped.
-    normal = _newell_normal(contour_3d)
-    normal = _apply_orientation_rules(normal)
-
-    # Calculate centroid for placement origin
-    centroid = _calculate_centroid(contour_3d)
-
-    # Build local coordinate system from normal
-    z_axis = np.array(normal)
-
-    # Choose reference vector using "Up-Preferred" strategy (Z-up)
-    if abs(z_axis[2]) > 0.9:
-        ref = np.array([1.0, 0.0, 0.0])
-    else:
-        ref = np.array([0.0, 0.0, 1.0])
-
-    x_axis = np.cross(ref, z_axis)
-    x_norm = np.linalg.norm(x_axis)
-    if x_norm < 0.001:
-        x_axis = np.array([1.0, 0.0, 0.0])
-    else:
-        x_axis = x_axis / x_norm
-
-    y_axis = np.cross(z_axis, x_axis)
-
-    # Project 3D contour points onto local 2D plane
-    contour_2d = []
-    for pt in contour_3d:
-        v = np.array([pt[0] - centroid[0], pt[1] - centroid[1], pt[2] - centroid[2]])
-        local_x = float(np.dot(v, x_axis))
-        # +y_axis matches the placement's reconstructed local Y; see
-        # _create_solid_contour_ir for the mirror-on-negation explanation.
-        local_y = float(np.dot(v, y_axis))
-        contour_2d.append((local_x, local_y))
+    centroid, x_axis, y_axis, z_axis, contour_2d, thickness_m = ef
 
     # Transform centroid to IFC coordinates (identity, both Z-up)
     ifc_origin = cache.get_or_create_point((centroid[0], centroid[1], centroid[2]))
@@ -5889,7 +6016,7 @@ def _create_extrude(model, context, elem: 'Extrude', cache: EntityCache):
         final_solid = _apply_contour_boolean_operations(
             model, base_solid, cuts, adds,
             centroid, x_axis, y_axis, z_axis, thickness_m, cache,
-            intersects=intersects, clips=clips,
+            contour_2d=contour_2d, intersects=intersects, clips=clips,
         )
 
         result_solid = final_solid
@@ -6152,7 +6279,7 @@ def _cylinder_solid(model, a, b, radius: float, cache: EntityCache,
 
 def _create_disk_solid_boolean_safe(model, path, radius: float,
                                     fillet_radius: float, cache: EntityCache,
-                                    offset=(0.0, 0.0, 0.0)):
+                                    frame: Optional[HostFrame] = None):
     """Boolean-operand-safe equivalent of a swept disk (pinned WS1 PR-E).
 
     ifcopenshell's geometry kernel mis-tessellates IfcBooleanResult trees
@@ -6169,11 +6296,23 @@ def _create_disk_solid_boolean_safe(model, path, radius: float,
 
     The pure render path (no booleans) keeps the true IfcSweptDiskSolid
     with real arcs.
+
+    ``frame`` (a :class:`HostFrame`, default: world) is the host frame of an
+    operand. Fillets are faceted in world and the points then mapped; circles
+    and miter planes are rigid-invariant, so nothing else depends on it. A
+    translation frame maps first and facets after, as this always did.
     """
     assert np is not None
-    pts = [_offset_pt(p, offset) for p in path]
+    if frame is None:
+        pts = [_offset_pt(p, (0.0, 0.0, 0.0)) for p in path]
+    else:
+        pts = [(float(p.x), float(p.y), float(p.z)) for p in path]
+        if frame.is_translation:
+            pts = [frame.pt(p) for p in pts]
     if fillet_radius and fillet_radius > 0:
         pts = _facet_fillet_path(pts, fillet_radius)
+    if frame is not None and not frame.is_translation:
+        pts = [frame.pt(p) for p in pts]
     if len(pts) == 2:
         return _cylinder_solid(model, pts[0], pts[1], radius, cache)
 
@@ -6284,34 +6423,50 @@ def _revolve_rect_bounds(profile):
     return r0, r1, h0, h1
 
 
-def _revolve_frame(elem: 'Revolve', offset):
-    """``(p0, a, r_dir, s_dir)`` — the pinned revolve frame, in world metres.
+def _revolve_frame(elem: 'Revolve', frame: Optional[HostFrame] = None):
+    """``(p0, a, r_dir, s_dir)`` — the pinned revolve frame, in the host frame
+    (world metres when ``frame`` is ``None``).
 
     ``a`` is the axis (path[0] -> path[1]); ``r_dir`` the radial start
     direction; ``s_dir = a x r_dir`` completes a right-handed basis, so a
     right-handed rotation by t about ``a`` sends ``r_dir`` to
     ``cos t * r_dir + sin t * s_dir``. That identity is what lets the sector
     be written as an ordinary counter-clockwise 2D profile.
+
+    ``r_dir`` reads WORLD Z, so for a rotated host frame the basis is built in
+    world and then mapped; building it from mapped points would move the
+    start plane of a partial revolve. A translation frame shifts the points
+    first, as this always did.
     """
     assert np is not None
-    p0 = _offset_pt(elem.path[0], offset)
-    p1 = _offset_pt(elem.path[1], offset)
+    rotated = frame is not None and not frame.is_translation
+    if frame is None or rotated:
+        p0 = _offset_pt(elem.path[0], (0.0, 0.0, 0.0))
+        p1 = _offset_pt(elem.path[1], (0.0, 0.0, 0.0))
+    else:
+        p0 = frame.pt((elem.path[0].x, elem.path[0].y, elem.path[0].z))
+        p1 = frame.pt((elem.path[1].x, elem.path[1].y, elem.path[1].z))
     a = np.array([p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], dtype=np.float64)
     a = a / np.linalg.norm(a)
     zxa = np.cross(np.array([0.0, 0.0, 1.0]), a)
     n_zxa = np.linalg.norm(zxa)
     r_dir = np.array([1.0, 0.0, 0.0]) if n_zxa < 1e-9 else zxa / n_zxa
-    return np.asarray(p0, dtype=np.float64), a, r_dir, np.cross(a, r_dir)
+    s_dir = np.cross(a, r_dir)
+    p0 = np.asarray(p0, dtype=np.float64)
+    if rotated:
+        p0 = np.asarray(frame.pt(p0))
+        a, r_dir, s_dir = (np.asarray(frame.dir(v)) for v in (a, r_dir, s_dir))
+    return p0, a, r_dir, s_dir
 
 
-def _revolve_as_extrusion(model, elem, rect, offset):
+def _revolve_as_extrusion(model, elem, rect, frame=None):
     """Rectangle-profile Revolve -> IfcExtrudedAreaSolid about the same axis.
 
     EXACT for a full turn (a circle or a hollow circle — no facets at all);
     sagitta-bounded for a sector, where the arc becomes a polygon.
     """
     r0, r1, h0, h1 = rect
-    p0, a, r_dir, s_dir = _revolve_frame(elem, offset)
+    p0, a, r_dir, s_dir = _revolve_frame(elem, frame)
     angle_rad = math.radians(elem.angle / 100.0)
     base = p0 + a * h0                       # the profile plane sits at h0
 
@@ -6366,7 +6521,7 @@ def _revolve_as_extrusion(model, elem, rect, offset):
     )
 
 
-def _revolve_as_brep(model, elem, offset):
+def _revolve_as_brep(model, elem, frame=None):
     """General-profile Revolve -> IfcFacetedBrep (a solid, so still boolean-able).
 
     Faceted only in the sweep direction; every profile vertex is exact. The
@@ -6379,9 +6534,9 @@ def _revolve_as_brep(model, elem, offset):
     signed areas cancel), so an author's profile winding cannot leak out as
     inside-out geometry.
     """
-    p0, a, r_dir, s_dir = _revolve_frame(elem, offset)
+    p0, a, r_dir, s_dir = _revolve_frame(elem, frame)
     angle_rad = math.radians(elem.angle / 100.0)
-    prof = [(float(p.x), float(p.y)) for p in elem.profile]
+    prof =[(float(p.x), float(p.y)) for p in elem.profile]
     if len(prof) > 1 and prof[0] == prof[-1]:
         prof = prof[:-1]
     full_turn = elem.angle == 36000
@@ -6433,8 +6588,8 @@ def _revolve_as_brep(model, elem, offset):
 
 
 def _create_revolved_solid(model, elem: 'Revolve', cache: EntityCache,
-                           offset=(0.0, 0.0, 0.0)):
-    """The solid for a Revolve (meters), shifted by ``offset``.
+                           frame: Optional[HostFrame] = None):
+    """The solid for a Revolve (meters), in ``frame`` (world when ``None``).
 
     NOT an ``IfcRevolvedAreaSolid``, and that is the whole point of this
     function. **web-ifc — the production renderer, via @thatopen/fragments —
@@ -6478,8 +6633,8 @@ def _create_revolved_solid(model, elem: 'Revolve', cache: EntityCache,
     _ensure_si_unit(model, "PLANEANGLEUNIT", "RADIAN")
     rect = _revolve_rect_bounds(elem.profile)
     if rect is not None:
-        return _revolve_as_extrusion(model, elem, rect, offset)
-    return _revolve_as_brep(model, elem, offset)
+        return _revolve_as_extrusion(model, elem, rect, frame)
+    return _revolve_as_brep(model, elem, frame)
 
 
 def _path_aabb(path, radius: float):
@@ -6926,7 +7081,7 @@ def _apply_clips(model, solid, clips, *, center=(0.0, 0.0, 0.0), axes=None):
     return result
 
 
-def _planar_frame_prisms(model, pts, section, cache, vertical_ref):
+def _planar_frame_prisms(model, pts, section, cache, vertical_ref, *, frame=None):
     """Boolean-free member prisms for a planar closed rect-section loop.
 
     Each member of a planar mitered frame is a PRISM: a quad in the frame
@@ -7016,12 +7171,18 @@ def _planar_frame_prisms(model, pts, section, cache, vertical_ref):
         rel = p3 - base
         return (float(np.dot(rel, e1)), float(np.dot(rel, e2)))
 
+    # A rotated host frame (boolean operand) maps only the emitted placement;
+    # the 2D quads are frame-free.
+    if frame is not None:
+        base_e, normal_e, e1_e = frame.pt(base), frame.dir(normal), frame.dir(e1)
+    else:
+        base_e, normal_e, e1_e = base, normal, e1
     loc = model.create_entity(
-        "IfcCartesianPoint", Coordinates=[float(v) for v in base])
+        "IfcCartesianPoint", Coordinates=[float(v) for v in base_e])
     axis_dir = model.create_entity(
-        "IfcDirection", DirectionRatios=[float(v) for v in normal])
+        "IfcDirection", DirectionRatios=[float(v) for v in normal_e])
     ref_dir = model.create_entity(
-        "IfcDirection", DirectionRatios=[float(v) for v in e1])
+        "IfcDirection", DirectionRatios=[float(v) for v in e1_e])
     position = model.create_entity(
         "IfcAxis2Placement3D", Location=loc, Axis=axis_dir,
         RefDirection=ref_dir)
@@ -7059,7 +7220,8 @@ def _planar_frame_prisms(model, pts, section, cache, vertical_ref):
 
 
 def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
-                        vertical_ref=(1.0, 0.0, 0.0)):
+                        vertical_ref=(1.0, 0.0, 0.0), *,
+                        frame: Optional[HostFrame] = None):
     """Geometry items for a path-form Sweep (world/meters path points).
 
     * Straight 2-point path -> one plain IfcExtrudedAreaSolid.
@@ -7070,6 +7232,13 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
       point) miters the wrap joint too.
     * fillet_radius > 0 (open paths; construction rejects closed+fillet):
       corners are faceted into <=15 deg arc chords first, then mitered.
+
+    ``frame`` (a :class:`HostFrame`) emits the items in a boolean host's
+    frame. A translation shifts the path first, as this always did. A rotated
+    frame keeps every decision in WORLD (segment directions, the
+    ``segment_axes`` section roll with its vertical-segment branch and world-Z
+    up reference, the miter planes) and maps only the emitted placements:
+    mapping the path first would change the roll of the section.
 
     Returns (items, has_booleans).
     """
@@ -7086,6 +7255,12 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
     pts = [(float(p[0]), float(p[1]), float(p[2])) if isinstance(p, tuple)
            else (float(p.x), float(p.y), float(p.z))
            for p in path_pts]
+    if frame is not None and frame.is_translation:
+        pts = [frame.pt(p) for p in pts]
+        frame = None
+    # Emission mapping: identity unless a rotated host frame is given.
+    P = frame.pt if frame is not None else (lambda p: p)
+    D = frame.dir if frame is not None else (lambda v: v)
     closed = len(pts) >= 4 and pts[0] == pts[-1]
     fillet_m = getattr(elem, 'fillet_radius', 0) or 0
     if fillet_m and not closed:
@@ -7105,7 +7280,7 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
     if closed and not fillet_m and section[0] == "rect" \
             and not (getattr(elem, 'profile_rotation', 0) or 0):
         planar_items = _planar_frame_prisms(
-            model, pts, section, cache, vertical_ref)
+            model, pts, section, cache, vertical_ref, frame=frame)
         if planar_items is not None:
             return planar_items, False
 
@@ -7174,11 +7349,11 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
         x_axis, y_axis = _segment_axes(
             d, vertical_ref, getattr(elem, 'profile_rotation', 0) or 0)
         loc = model.create_entity("IfcCartesianPoint",
-                                  Coordinates=[float(v) for v in seg_start])
+                                  Coordinates=[float(v) for v in P(seg_start)])
         axis = model.create_entity("IfcDirection",
-                                   DirectionRatios=[float(v) for v in d])
+                                   DirectionRatios=[float(v) for v in D(d)])
         ref_dir = model.create_entity("IfcDirection",
-                                      DirectionRatios=[float(v) for v in x_axis])
+                                      DirectionRatios=[float(v) for v in D(x_axis)])
         position = model.create_entity("IfcAxis2Placement3D", Location=loc,
                                        Axis=axis, RefDirection=ref_dir)
         solid = model.create_entity(
@@ -7214,7 +7389,7 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
             result = model.create_entity(
                 "IfcBooleanResult", Operator="DIFFERENCE",
                 FirstOperand=result,
-                SecondOperand=_miter_half_space(model, v_eps, m))
+                SecondOperand=_miter_half_space(model, P(v_eps), D(m)))
             has_booleans = True
         if end_joint is not None:
             # Remove the overshoot: {(p - vertex) . m > 0} belongs to the
@@ -7227,7 +7402,7 @@ def _profile_path_items(model, path_pts, elem: 'Sweep', cache: EntityCache,
             result = model.create_entity(
                 "IfcBooleanResult", Operator="DIFFERENCE",
                 FirstOperand=result,
-                SecondOperand=_miter_half_space(model, v_eps, -m))
+                SecondOperand=_miter_half_space(model, P(v_eps), D(-m)))
             has_booleans = True
         items.append(result)
 

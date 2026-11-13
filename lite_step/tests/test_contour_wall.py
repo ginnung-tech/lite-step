@@ -367,51 +367,67 @@ class TestBoxWallRegression:
 
 
 # ---------------------------------------------------------------------------
-# An unsupported boolean operand is skipped, not fatal
+# A contour Extrude is a boolean operand; an unsupported one is skipped
 # ---------------------------------------------------------------------------
 
 
-def test_contour_cut_skips_an_unsupported_operand_instead_of_crashing(caplog):
-    """`_create_contour_cut_solid` must answer the way its sibling already does.
+def test_a_contour_extrude_operand_builds_in_a_contour_host_frame():
+    """A contour ``Extrude`` cuts a contour host: the operand is BUILT.
 
-    `_create_cut_solid` guards the identical condition — an operand with no
-    `start`/`end` is not a box-mode Solid — warns, and returns None, which
-    `apply_boolean_chain` treats as "skip this operand". The contour twin,
-    ~400 lines away, read `operand.start.x` unconditionally and died with
-    `AttributeError: 'Extrude' object has no attribute 'start'`.
-
-    Two code paths, one condition, opposite outcomes. Reached in practice
-    whenever two contour-mode solids overlap and displacement infers a carve
-    between them — and an anchored child cannot use the usual identity
-    `placement=` escape hatch, because `.anchor()` and `placement=` are
-    mutually exclusive by construction. Found by the 5-link anchor chain in
-    scenario_b2_real_anchor_chain.py.
+    This used to be the test that it was skipped. ``_create_contour_cut_solid``
+    read only box corners, so two overlapping contour solids (the 5-link
+    anchor chain in scenario_b2_real_anchor_chain.py, the slats and ribs of a
+    park bench) lost every inferred carve between them. The contour host now
+    builds its operands with the same ``_create_hole_solid_local`` every host
+    uses, in a ``HostFrame`` made of the contour axes.
     """
-    import logging
-
+    import ifcopenshell
     import numpy as np
 
     from lite_step.ifc import generator as gen
+    from lite_step.ifc.entity_cache import EntityCache
 
     cutter = Extrude(
         contour=[Point(x=0, y=0, z=0), Point(x=1000, y=0, z=0),
                  Point(x=1000, y=0, z=1000)],
         thickness=200, name="wedge",
     )
-    assert getattr(cutter, "start", None) is None, (
-        "fixture is wrong — an Extrude must have no start/end for this to "
-        "exercise the guard"
-    )
+    model = ifcopenshell.file(schema="IFC4X3_ADD2")
+    frame = gen.HostFrame((0.0, 0.0, 0.0),
+                          np.array([[0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+                                    [1.0, 0.0, 0.0]]))
+    out = gen._create_hole_solid_local(
+        model, cutter, (-1.0, -1.0, 0.0), (0.0, 0.0, 0.0), EntityCache(model),
+        parent_max=(1.0, 1.0, 0.2), frame=frame)
 
+    assert out is not None and out.is_a("IfcExtrudedAreaSolid")
+    assert out.SweptArea.is_a("IfcArbitraryClosedProfileDef")
+    assert out.Depth == pytest.approx(200.0)
+    # The operand's own Newell normal is emitted THROUGH the frame: R @ n.
+    _c, _x, _y, z_axis, _c2, _t = gen._extrude_frame(cutter)
+    assert tuple(out.Position.Axis.DirectionRatios) == pytest.approx(
+        tuple(frame.R @ z_axis))
+
+
+def test_an_unsupported_operand_is_skipped_before_touching_the_model(caplog):
+    """A Mesh is never a boolean operand (meshes are carved, never carve): the
+    builder warns and returns None — and answers before reading ``model`` or
+    ``cache``, which is what makes it a guard rather than a late catch."""
+    import logging
+
+    import numpy as np
+
+    from lite_step.ifc import generator as gen
+    from lite_step.tests._fixtures import terrain_mesh
+
+    frame = gen.HostFrame((0.0, 0.0, 0.0), np.array(
+        [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]))
     with caplog.at_level(logging.WARNING, logger=gen.logger.name):
-        out = gen._create_contour_cut_solid(
-            None, cutter, (0.0, 0.0, 0.0),
-            np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]),
-            np.array([0.0, 0.0, 1.0]), None,
-        )
+        out = gen._create_hole_solid_local(
+            None, terrain_mesh(), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), None,
+            frame=frame)
 
-    # `model` and `cache` are None on purpose: the guard must answer before
-    # touching either, which is what makes it a guard rather than a late catch.
     assert out is None, "an unsupported operand must be skipped, not built"
     assert any("unsupported boolean operand" in r.getMessage()
-               for r in caplog.records), "the skip must be announced"
+               and "contour Extrude" in r.getMessage()
+               for r in caplog.records),         "the skip must be announced, naming the operands that ARE supported"
