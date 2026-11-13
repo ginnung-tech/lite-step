@@ -383,6 +383,15 @@ class EntityCache:
         }
         if name:
             kwargs["ProfileName"] = name
+        # An explicit identity Position. It is OPTIONAL in IFC4X3 and the
+        # geometry is the same either way, but web-ifc logs one error per
+        # profile without it, on every load (an upstream defect; lite-step#14).
+        # Fresh entities per profile: the deduplicator merges them, and shared
+        # placement sub-entities are what the C++ layer has crashed on before.
+        kwargs["Position"] = self.model.create_entity(
+            "IfcAxis2Placement2D",
+            Location=self.model.create_entity("IfcCartesianPoint",
+                                              Coordinates=[0.0, 0.0]))
 
         profile = self.model.create_entity("IfcRectangleProfileDef", **kwargs)
         self._rect_profiles[key] = profile

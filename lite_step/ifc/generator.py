@@ -1698,6 +1698,10 @@ def generate_ifc(
         # and before anything reads the model back.
         cache.flush_material_associations()
 
+        # IfcBuildingElementProxy.HasObjectName — last, after the manifest,
+        # so the names it mints never enter LITESTEP_META.
+        _name_anonymous_proxies(model)
+
         # Serialize to string
         ifc_content = _model_to_string(model)
 
@@ -1727,6 +1731,49 @@ def generate_ifc(
             success=False,
             error=f"IFC generation failed: {e}\n{traceback.format_exc()}"
         )
+
+
+def _nearest_named_ancestor(product) -> Optional[str]:
+    """The Name of the closest named whole or structure above ``product``:
+    its aggregate parent first (a footing's body), then its spatial container."""
+    seen = set()
+    node = product
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        parent = None
+        for rel in getattr(node, "Decomposes", None) or ():
+            parent = rel.RelatingObject
+        if parent is None:
+            for rel in getattr(node, "ContainedInStructure", None) or ():
+                parent = rel.RelatingStructure
+        if parent is None:
+            return None
+        if parent.Name:
+            return parent.Name
+        node = parent
+    return None
+
+
+def _name_anonymous_proxies(model) -> None:
+    """Give every unnamed ``IfcBuildingElementProxy`` a Name.
+
+    IFC 4.3 requires one (``IfcBuildingElementProxy.HasObjectName``). An
+    anonymous DSL solid — the body of a footing, a covering's panel — has no
+    canonical name by design (anonymous geometry belongs to its nearest named
+    ancestor; see ``compiler.naming``), so the emitted proxy carries
+    ``proxy#<n>:<ancestor>``: the ancestor's canonical name and the proxy's
+    1-based index among that ancestor's anonymous proxies, in emission order.
+    ``#`` is not legal in a leaf, so the name can never collide with, or be
+    resolved as, a canonical name. Runs after the manifest is built, so patch
+    identity is unchanged.
+    """
+    counts: Dict[str, int] = {}
+    for proxy in sorted(model.by_type("IfcBuildingElementProxy"), key=lambda e: e.id()):
+        if proxy.Name:
+            continue
+        ancestor = _nearest_named_ancestor(proxy) or "anonymous"
+        counts[ancestor] = counts.get(ancestor, 0) + 1
+        proxy.Name = f"proxy#{counts[ancestor]}:{ancestor}"
 
 
 def _create_wall(model, context, wall: Wall, cache: EntityCache):
@@ -3877,12 +3924,31 @@ def _create_grid(model, context, grid: "grids.ResolvedGrid", cache: EntityCache)
     """
     assert np is not None
 
+    # IfcGridAxis.WR1: an axis curve is 2D (``AxisCurve.Dim = 2``) — a grid
+    # is a PLAN object, and its axes live in the grid's own XY plane. The
+    # height goes on the grid's placement instead: the lowest authored Z. An
+    # axis authored at another height (a sloping guide line is accepted) is
+    # projected onto that plane, loudly, because its Z is lost.
+    all_axes = list(grid.u_axes) + list(grid.v_axes)
+    zs = [float(_dsl_to_ifc_point(pt.x, pt.y, pt.z)[2])
+          for axis in all_axes for pt in axis.element.points]
+    grid_z = min(zs) if zs else 0.0
+    off_plane = sorted({grids.axis_label(axis.element) for axis in all_axes
+                        for pt in axis.element.points
+                        if abs(float(_dsl_to_ifc_point(pt.x, pt.y, pt.z)[2]) - grid_z) > 1e-9})
+    if off_plane:
+        logger.warning(
+            "IfcGrid: axis %s is not at the grid's height (z = %.4g m) — an "
+            "IfcGridAxis curve is 2D, so it is projected onto the grid plane "
+            "and its Z is dropped. Author grid lines at one height.",
+            ", ".join(off_plane), grid_z)
+
     def _axis_entity(axis: "grids.GridAxis"):
-        ifc_points = [
-            model.create_entity("IfcCartesianPoint",
-                                Coordinates=list(_dsl_to_ifc_point(pt.x, pt.y, pt.z)))
-            for pt in axis.element.points
-        ]
+        ifc_points = []
+        for pt in axis.element.points:
+            x, y, _z = _dsl_to_ifc_point(pt.x, pt.y, pt.z)
+            ifc_points.append(model.create_entity(
+                "IfcCartesianPoint", Coordinates=[float(x), float(y)]))
         polyline = model.create_entity("IfcPolyline", Points=ifc_points)
         # SameSense=True: the curve is emitted in its AUTHORED direction. The
         # half-plane canonicalisation grids.py does is for classification only
@@ -3901,8 +3967,9 @@ def _create_grid(model, context, grid: "grids.ResolvedGrid", cache: EntityCache)
     if grid.predefined_type:
         ifc_grid.PredefinedType = grid.predefined_type
 
-    # Identity placement
+    # Identity placement, lifted to the grid's height (see the 2D axes above).
     matrix = np.eye(4, dtype=np.float64)
+    matrix[2, 3] = grid_z
     _set_placement(model, ifc_grid, matrix, cache)
 
     return ifc_grid
@@ -6675,6 +6742,10 @@ def _v15_rep_type(solid) -> str:
         return "CSG"
     if solid.is_a("IfcSweptDiskSolid"):
         return "AdvancedSweptSolid"
+    if solid.is_a("IfcFacetedBrep"):
+        # A non-rectangle Revolve (see _create_revolved_solid). The label
+        # must name the item (IfcShapeRepresentationTypes): a brep is "Brep".
+        return "Brep"
     return "SweptSolid"
 
 
@@ -7076,9 +7147,24 @@ def _apply_clips(model, solid, clips, *, center=(0.0, 0.0, 0.0), axes=None):
         n = [c / mag for c in n]
         half = _miter_half_space(model, o, [-c for c in n])
         result = model.create_entity(
-            "IfcBooleanClippingResult", Operator="DIFFERENCE",
+            _clip_entity_for(result), Operator="DIFFERENCE",
             FirstOperand=result, SecondOperand=half)
     return result
+
+
+#: What ``IfcBooleanClippingResult.FirstOperandType`` admits: a swept solid or
+#: another clipping result. Anything else (a boolean tree, a faceted brep) is
+#: clipped with a plain ``IfcBooleanResult`` DIFFERENCE — the same half-space
+#: subtraction, the same solid, without the where-rule violation.
+_CLIPPABLE = ("IfcSweptAreaSolid", "IfcSweptDiskSolid", "IfcBooleanClippingResult")
+
+
+def _clip_entity_for(first_operand) -> str:
+    """``IfcBooleanClippingResult`` when the schema admits ``first_operand`` as
+    its FirstOperand, else ``IfcBooleanResult``."""
+    if any(first_operand.is_a(t) for t in _CLIPPABLE):
+        return "IfcBooleanClippingResult"
+    return "IfcBooleanResult"
 
 
 def _planar_frame_prisms(model, pts, section, cache, vertical_ref, *, frame=None):
