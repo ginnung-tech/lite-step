@@ -72,6 +72,7 @@ def compile_model(source: Path, quiet: bool) -> Path:
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
 
     started = time.time()
+    print(f"compiling {source.name}…", flush=True)
     # Not "__main__": the model's own compile_main() tail must not write a second file.
     with _quiet(quiet):
         namespace = runpy.run_path(str(source), run_name="__lite_step__")
@@ -273,7 +274,7 @@ def cmd_push(args) -> int:
             return code
         source = Path(args.source).resolve()
         seen = source.stat().st_mtime
-        print(f"watching {source.name} and its parameters in Lapin; Ctrl+C stops.")
+        print(f"watching {source.name} and its parameters in Lapin; Ctrl+C stops (a plain push exits by itself).")
         try:
             while True:
                 time.sleep(0.5)
@@ -387,6 +388,11 @@ def main(argv: list[str] | None = None) -> int:
     except Failed as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        # Ctrl+C mid-compile or mid-reload: say so, no traceback. A reload
+        # Lapin had already started finishes there; nothing is half-written.
+        print("stopped.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

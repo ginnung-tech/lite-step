@@ -13,7 +13,7 @@ _sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[1]))
 
 import math
 import numpy as np
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.models import (Project, Storey, Point, Point2D,
     Wall, Window, Door, Slab, Roof, Column, Beam, Space, Site, Element,
     Box, Extrude, Sweep, Sheet, Pipe, Revolve, Mesh, Bar, Material, LayerSet,
@@ -34,9 +34,9 @@ SASH_DEPTH = 70
 SASH_FACE = 45
 SASH_LAP = 12
 FIT_GAP = 10
-BAR_WIDTH = 24
+BAR_WIDTH = param(24, "mm", "Glazing bar width")
 BAR_PROUD = 12
-PANE_ROWS = 3
+PANE_ROWS = param(3, "", "Pane rows")
 GLAZING = "Glass_Monolithic"
 PANE_MM = 4
 GAS_GAP_MM = 16

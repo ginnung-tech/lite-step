@@ -494,6 +494,7 @@ A band is EITHER `layers=` OR authored geometry, never both.
 **Products are finished catalog items.**
 Build UNPLACED → promote `P = Product(src, name="nordic_1400x1600")` → place `occ = P.occurrence(name="kitchen_window")`.
 No variables, ever: geometric kwargs on `.occurrence()` are an error, and two windows differing by 200 mm ARE two Products.
+A unit repeated more than a couple of times SHOULD be a Product: its occurrences share one body in the IFC, which keeps a large model's file and compile small. Placing occurrences with `placement=` (or hosting them as openings) lets the compiler group them cheaply; occurrences baked in by `.anchor()` are compared in full.
 
 ## 11. Inspecting a model
 

@@ -64,7 +64,7 @@ if str(_repo_root) not in sys.path:
 
 import math
 
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.models import (Project, Storey, Space, Point, Point2D, Mesh, Site, Box, Slab,
                               Wall, Window, Door, Element, Extrude, Sweep, Sheet, Roof, Pipe,
                               Material, LayerSet, miter, Bar, Product)
@@ -72,8 +72,8 @@ from lite_step.models import (Project, Storey, Space, Point, Point2D, Mesh, Site
 I = lambda x: int(round(x))  # noqa: E731
 
 # ══ FOOTPRINT ════════════════════════════════════════════════════════════════
-FOUNDATION_FOOTPRINT_X = 12000   # mm, E–W OUTER footprint — the RIDGE direction; GABLES at ±hx
-FOUNDATION_FOOTPRINT_Y = 9000    # mm, N–S OUTER footprint — the SPAN; EAVES at ±hy
+FOUNDATION_FOOTPRINT_X = param(12000, "mm", "Footprint east-west")   # mm, E–W OUTER footprint — the RIDGE direction; GABLES at ±hx
+FOUNDATION_FOOTPRINT_Y = param(9000, "mm", "Footprint north-south")    # mm, N–S OUTER footprint — the SPAN; EAVES at ±hy
 SITE_BLOCK_BUFFER = 10000
 SITE_BLOCK_DEPTH = 15000
 
@@ -99,7 +99,7 @@ STAIR_GOING = 260            # 2·175 + 260 = 610, inside the 600…640 comfort 
 STAIR_RISERS = 17            # ⇒ a 2975 mm ground storey. See assert_the_section_closes().
 STAIR_WIDTH = 1000           # clear flight width — a villa stair, not the 1500 escape stair
 GROUND_STOREY_HEIGHT = STAIR_RISERS * STAIR_RISER          # 2975
-LOFT_WALL_HEIGHT = 700       # the *skunk*: masonry above the LOFT floor at the eaves
+LOFT_WALL_HEIGHT = param(700, "mm", "Loft knee wall height")       # the *skunk*: masonry above the LOFT floor at the eaves
 STAIR_HEADROOM = 2100        # mm clear over any walking surface (BR18 minimum)
 STAIR_LOWER_STEPS = 9        # 9 up, quarter landing, 8 up
 STAIR_LANDING = STAIR_WIDTH  # a quarter landing is square, one flight wide
@@ -116,7 +116,7 @@ EXT_INSULATION_MM = 190
 EXT_SANDWICH_MM = EXT_BRICK_MM + EXT_CAVITY_MM + EXT_INSULATION_MM      # 328
 
 # ══ ROOF FRAME (systems/roof) ════════════════════════════════════════════════
-ROOF_PITCH_DEG = 45
+ROOF_PITCH_DEG = param(45, "deg", "Roof pitch")
 RAFTER_SPACING = 1000
 TIMBER = "Timber_C24"
 GLULAM = "Glulam_GL28h"
@@ -133,7 +133,7 @@ INNER_WALL_OFFSET = 3000
 LOFT_HEADROOM = 2400         # the collar sits where the loft gets this much flat ceiling
 
 # ══ ROOF OVERHANG (systems/gable-detail) ═════════════════════════════════════
-EAVE_OVERHANG = 80
+EAVE_OVERHANG = param(80, "mm", "Eave overhang")
 VERGE_OVERHANG = 80
 EAVE_HALF_Y = FOUNDATION_FOOTPRINT_Y // 2 + EXT_SANDWICH_MM + EAVE_OVERHANG    # 4908
 VERGE_HALF_X = FOUNDATION_FOOTPRINT_X // 2 + EXT_SANDWICH_MM + VERGE_OVERHANG  # 6408
