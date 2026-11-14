@@ -249,11 +249,18 @@ def normalize_step_floats(step: str) -> str:
     the token regex consumes them first). Idempotent: already-short reals
     round-trip to themselves, so it is safe to run over any emitted output.
     """
+    # A building repeats its numbers: a 52-storey tower writes 3.8 million
+    # reals with 2,054 distinct spellings, so each is encoded once.
+    encoded: dict = {}
+
     def _repl(m: "re.Match[str]") -> str:
         num = m.group(1)
         if num is None:            # matched a quoted string — leave verbatim
             return m.group(0)
-        return encode_real(float(num))
+        out = encoded.get(num)
+        if out is None:
+            out = encoded[num] = encode_real(float(num))
+        return out
 
     return _STEP_TOKEN_RE.sub(_repl, step)
 

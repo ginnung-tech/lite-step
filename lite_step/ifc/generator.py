@@ -4454,6 +4454,15 @@ class _ModelShapeAdapter:
     def name(self, product):
         return getattr(product, "Name", None)
 
+    def reachable(self, handle):
+        """Every addressable entity forward-reachable from ``handle``, itself included.
+
+        ``file.traverse`` walks the forward references natively; wrapped
+        scalars (id 0) are left out, as :meth:`is_entity` leaves them out of
+        the Python walk this replaces.
+        """
+        return [e for e in self._model.traverse(handle) if e.id() != 0]
+
     def is_entity(self, value) -> bool:
         """An ADDRESSABLE entity — a `#123=` line, not a wrapped scalar.
 

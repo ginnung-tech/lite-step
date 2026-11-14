@@ -751,8 +751,16 @@ def purgeable_after_sharing(roots: Sequence[Any], adapter: ShapeAdapter) -> List
             for sub in _entity_values(attr, adapter):
                 collect(sub, depth + 1)
 
+    reachable = getattr(adapter, "reachable", None)
     for root in roots:
-        collect(root, 0)
+        if reachable is None:
+            collect(root, 0)
+        else:
+            # The same set, gathered natively: every entity forward-reachable
+            # from the root. The Python walk above read 13 million values on
+            # a 52-storey tower.
+            for handle in reachable(root):
+                candidates.setdefault(adapter.key(handle), handle)
 
     # Styles attach to a doomed item from the outside; take them with it.
     for handle in list(candidates.values()):
