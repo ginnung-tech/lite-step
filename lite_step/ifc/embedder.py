@@ -109,7 +109,10 @@ LITESTEP_META_PSET_NAME = "LITESTEP_META"
 #: the IFC 4.3 where-rules (#15, #16): anonymous proxies are named, grid axes
 #: are 2D with the height on the grid, a clip on a non-swept solid is an
 #: ``IfcBooleanResult``, a brep Revolve is labelled ``Brep``. No geometry moves
-#: in (2); it is the file a reader walks that changes.
+#: in (2); it is the file a reader walks that changes. (3) #20: a boolean
+#: operand of an unsupported type (a ``Mesh`` in ``.difference()``) is a
+#: compile error instead of a warning and a missing cut — a verb refusing what
+#: an earlier version accepted. 0 of 36 corpus models carry one.
 LITESTEP_META_VERSION = "20"
 
 

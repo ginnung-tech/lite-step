@@ -357,15 +357,28 @@ def test_an_inferred_carve_that_cannot_be_emitted_fails_the_compile():
     assert disp._carve_label(body) in res.error
 
 
-def test_an_authored_unsupported_operand_still_only_warns(caplog):
-    """Open question 1 of the spec: authored ``.difference()`` operands keep
-    the warning. Only the inferred carve, which the carve report already
-    promised, is a hard error."""
+def test_an_authored_unsupported_operand_fails_the_compile_too():
+    """#20: an authored ``.difference()`` with an operand no builder can
+    realise is a compile error as well, naming the operand — the cut the
+    author wrote is not in the file otherwise. Measured before making it
+    fatal: 0 of 36 corpus models and 0 of 14 examples carry one."""
     from lite_step.tests._fixtures import terrain_mesh
 
     host = Box(name="host", start=P(x=0, y=0, z=0), end=P(x=1000, y=600, z=400))
     host.difference(terrain_mesh())
-    with caplog.at_level(logging.WARNING):
-        _compile(host)
-    assert any("unsupported boolean operand" in r.getMessage()
-               for r in caplog.records)
+    p = Project(name="carve")
+    s = Storey(name="ground")
+    s.add(host)
+    p.add_storey(s)
+    res = generate_ifc(normalize_project_to_meters(p), source_code=None)
+    assert not res.success
+    assert "unsupported boolean operand Mesh" in res.error
+    assert "A Mesh is carved, never carves" in res.error
+
+
+def test_a_degenerate_box_operand_still_only_warns():
+    """The falsification partner: a well-formed operand that removes nothing
+    (under 1 mm thick) is the author's mistake to see, not a compile error."""
+    host = Box(name="host", start=P(x=0, y=0, z=0), end=P(x=1000, y=600, z=400))
+    host.difference(Box(start=P(x=100, y=100, z=100), end=P(x=100, y=300, z=300)))
+    _compile(host)

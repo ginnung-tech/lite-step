@@ -409,12 +409,11 @@ def test_a_contour_extrude_operand_builds_in_a_contour_host_frame():
         tuple(frame.R @ z_axis))
 
 
-def test_an_unsupported_operand_is_skipped_before_touching_the_model(caplog):
+def test_an_unsupported_operand_is_refused_before_touching_the_model():
     """A Mesh is never a boolean operand (meshes are carved, never carve): the
-    builder warns and returns None — and answers before reading ``model`` or
-    ``cache``, which is what makes it a guard rather than a late catch."""
-    import logging
-
+    builder refuses it, naming the operands that ARE supported — and answers
+    before reading ``model`` or ``cache``, which is what makes it a guard
+    rather than a late catch."""
     import numpy as np
 
     from lite_step.ifc import generator as gen
@@ -422,12 +421,7 @@ def test_an_unsupported_operand_is_skipped_before_touching_the_model(caplog):
 
     frame = gen.HostFrame((0.0, 0.0, 0.0), np.array(
         [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]))
-    with caplog.at_level(logging.WARNING, logger=gen.logger.name):
-        out = gen._create_hole_solid_local(
+    with pytest.raises(gen.UnsupportedOperandError, match="contour Extrude"):
+        gen._create_hole_solid_local(
             None, terrain_mesh(), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), None,
             frame=frame)
-
-    assert out is None, "an unsupported operand must be skipped, not built"
-    assert any("unsupported boolean operand" in r.getMessage()
-               and "contour Extrude" in r.getMessage()
-               for r in caplog.records),         "the skip must be announced, naming the operands that ARE supported"

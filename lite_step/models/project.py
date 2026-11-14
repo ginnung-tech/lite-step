@@ -346,10 +346,14 @@ class Project(BaseModel):
     #: ring it closes is still refused.
     _pending_reads: list = PrivateAttr(default_factory=list)
 
-    #: ``(loser, winner, mechanism)`` per carve this compile realised — written
-    #: by ``displacement.apply_displacement``, read by the compile-time carve
-    #: report and by :meth:`assert_carved`.
+    #: ``(loser, winner, mechanism)`` per carve this compile PLANNED — written
+    #: by ``displacement.apply_displacement`` before any IFC exists.
     _carve_pairs: list = PrivateAttr(default_factory=list)
+
+    #: The subset of ``_carve_pairs`` the IFC really holds, written by
+    #: ``generate_ifc`` after emission; ``None`` until then. Read by the carve
+    #: report and by :meth:`assert_carved` (via ``displacement.carve_pairs``).
+    _carve_emitted: Optional[list] = PrivateAttr(default=None)
 
     #: ``(target_fragment, cutter_fragment)`` per :meth:`assert_carved` call,
     #: collected at AUTHOR time and checked after the displacement pass.

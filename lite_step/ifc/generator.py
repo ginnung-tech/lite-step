@@ -937,18 +937,29 @@ def _report_carve_pairs(proj) -> None:
 
 
 def _report_carves_emitted(proj) -> dict:
-    """``carve emission: planned=N emitted=M`` — inferred carves the file has.
+    """Record what the file holds, then report it.
 
-    ``planned`` is every inferred pair displacement recorded (the set the
-    ``carves:`` line above counts from); ``emitted`` is the subset whose
-    operand built a solid in this generation. They differ only when a host
-    never consumed its ``_cuts`` (an operand that fails to build raises
-    instead), and then the missing pairs are named. Silenced, like the carve
-    report, by ``LITESTEP_CARVE_REPORT=0``.
+    Writes ``proj._carve_emitted``: every planned pair, minus the INFERRED
+    ones whose operand built no solid in this generation. (Authored and mesh
+    pairs are not tracked per operand and pass through as planned.) The
+    ``carves:`` report and ``assert_carved`` read it from here on, via
+    ``displacement.carve_pairs``.
+
+    Then prints the ``carves:`` report and ``carve emission: planned=N
+    emitted=M`` for the inferred pairs. They differ only when a host never
+    consumed its ``_cuts`` (an operand that fails to build raises instead),
+    and then the missing pairs are named. Silenced, like the carve report, by
+    ``LITESTEP_CARVE_REPORT=0``.
     """
-    planned = {(lo, w) for lo, w, mech in (getattr(proj, "_carve_pairs", None) or [])
-               if mech == "inferred"}
+    all_pairs = list(getattr(proj, "_carve_pairs", None) or [])
+    planned = {(lo, w) for lo, w, mech in all_pairs if mech == "inferred"}
     emitted = planned & _CARVES_EMITTED
+    try:
+        proj._carve_emitted = [(lo, w, mech) for lo, w, mech in all_pairs
+                               if mech != "inferred" or (lo, w) in emitted]
+    except Exception:  # pragma: no cover - non-pydantic stand-ins in tests
+        pass
+    _report_carve_pairs(proj)
     if os.environ.get("LITESTEP_CARVE_REPORT", "") != "0":
         print(f"carve emission: planned={len(planned)} emitted={len(emitted)}",
               file=sys.stderr)
@@ -1118,16 +1129,13 @@ def generate_ifc(
         apply_displacement(proj)
     except DisplacementError as e:
         return IFCGenerationResult(success=False, error=str(e))
-    # Who carved whom, on every compile. Displacement direction is authoring
-    # order, and this line is the only place a diff or a reviewer can see it.
-    _report_carve_pairs(proj)
-    # …and the assertions that PIN it. Fatal, like a DisplacementError: a
-    # reordering that silently changes the joinery is the failure this exists
-    # to stop being silent.
+    # The carve report and ``assert_carved`` describe what the FILE holds, so
+    # both run after emission (see the end of the try below). Cleared here so
+    # a second generation of one project never reads the previous run's set.
     try:
-        check_carve_assertions(proj)
-    except CarveAssertionError as e:
-        return IFCGenerationResult(success=False, error=str(e))
+        proj._carve_emitted = None
+    except Exception:  # pragma: no cover - non-pydantic stand-ins in tests
+        pass
 
     # CSG depth budget. Runs HERE — after displacement, before either backend —
     # because most boolean depth comes from inferred carves, and because the
@@ -1713,7 +1721,14 @@ def generate_ifc(
         ifc_content, dedup_stats = deduplicate_ifc_step(
             ifc_content, drop_ids=cache.purged_ids)
         stats["dedup"] = dedup_stats
+        # Who carved whom — what the FILE holds. Displacement direction is
+        # authoring order, and this line is the only place a diff or a
+        # reviewer can see it.
         stats["carves"] = _report_carves_emitted(proj)
+        # …and the assertions that PIN it, against the same emitted set.
+        # Fatal, like a DisplacementError: a reordering that silently changes
+        # the joinery is the failure this exists to stop being silent.
+        check_carve_assertions(proj)
 
         return IFCGenerationResult(
             success=True,
@@ -1721,11 +1736,19 @@ def generate_ifc(
             stats=stats
         )
 
+    except CarveAssertionError as e:
+        return IFCGenerationResult(success=False, error=str(e))
+    except UnsupportedOperandError as e:
+        _report_carve_pairs(proj)
+        return IFCGenerationResult(success=False, error=str(e))
     except DisplacementError as e:
         # An inferred carve whose operand could not be built: the carve
         # report promised it, so this is a compile error, named by the pair.
+        # The report still prints — the PLANNED set, which is what there is.
+        _report_carve_pairs(proj)
         return IFCGenerationResult(success=False, error=str(e))
     except Exception as e:
+        _report_carve_pairs(proj)
         import traceback
         return IFCGenerationResult(
             success=False,
@@ -2090,10 +2113,21 @@ def _create_wall_contour(model, context, wall: Wall, body, cache: EntityCache):
     assert run is not None
     assert np is not None
 
-    thickness_m = body.thickness
-    if thickness_m is None:
-        # v1.5 one-source rule: a sheet Material carries the thickness.
-        thickness_m = _material_thickness_m(body)
+    # Plane frame + local 2D contour: the ONE definition a contour Extrude
+    # and its boolean operands also read (``_extrude_frame``), so a contour
+    # Wall body used as a cutter is exactly the wall that renders. Orientation
+    # rules never flip a vertical surface, so the extrusion side is the
+    # author's winding; for a vertical plane x_axis is the in-plane
+    # horizontal and y_axis points up.
+    ef = _extrude_frame(body)
+    if ef is None:
+        logger.warning(
+            "Wall %r: contour body has fewer than 3 points — wall skipped "
+            "entirely",
+            wall.ifc_name,
+        )
+        return None
+    centroid, x_axis, y_axis, z_axis, contour_2d, thickness_m = ef
     if thickness_m is None:
         logger.warning(
             "Wall %r: contour body has no thickness source (thickness= or "
@@ -2102,43 +2136,6 @@ def _create_wall_contour(model, context, wall: Wall, body, cache: EntityCache):
             wall.ifc_name,
         )
         return None
-
-    contour_3d = [(pt.x, pt.y, pt.z) for pt in body.contour]
-    if len(contour_3d) < 3:
-        logger.warning(
-            "Wall %r: contour body has fewer than 3 points — wall skipped "
-            "entirely",
-            wall.ifc_name,
-        )
-        return None
-
-    # Plane frame via Newell's method; orientation rules never flip a
-    # vertical surface, so the extrusion side is the author's winding.
-    normal = _newell_normal(contour_3d)
-    normal = _apply_orientation_rules(normal)
-    centroid = _calculate_centroid(contour_3d)
-
-    # Local coordinate system from the normal (Up-Preferred strategy —
-    # identical to _create_solid_contour). For a vertical plane this makes
-    # x_axis the in-plane horizontal direction and y_axis point up.
-    z_axis = np.array(normal)
-    if abs(z_axis[2]) > 0.9:
-        ref = np.array([1.0, 0.0, 0.0])
-    else:
-        ref = np.array([0.0, 0.0, 1.0])
-    x_axis = np.cross(ref, z_axis)
-    x_norm = np.linalg.norm(x_axis)
-    if x_norm < 0.001:
-        x_axis = np.array([1.0, 0.0, 0.0])
-    else:
-        x_axis = x_axis / x_norm
-    y_axis = np.cross(z_axis, x_axis)
-
-    # Project 3D contour points onto the local 2D plane
-    contour_2d = []
-    for pt in contour_3d:
-        v = np.array([pt[0] - centroid[0], pt[1] - centroid[1], pt[2] - centroid[2]])
-        contour_2d.append((float(np.dot(v, x_axis)), float(np.dot(v, y_axis))))
 
     ifc_origin = cache.get_or_create_point((centroid[0], centroid[1], centroid[2]))
     axis = cache.get_or_create_direction(
@@ -5181,6 +5178,18 @@ _SUPPORTED_OPERANDS = ("box-mode Box (start/end), contour Extrude, Pipe, Bar, "
                        "path Sweep, Revolve")
 
 
+class UnsupportedOperandError(ValueError):
+    """A boolean operand of a type (or a shape) no builder can realise.
+
+    Raised, not warned: ``.difference(mesh)`` and an inferred carve alike
+    would otherwise leave a cut the author wrote, or the carve report listed,
+    out of the file. ``generate_ifc`` turns it into a failed result naming
+    the operand and the host's operand vocabulary. A DEGENERATE operand (a
+    box under 1 mm on an axis) is not this: it is well-formed, removes
+    nothing, and still only warns.
+    """
+
+
 def _create_hole_solid_local(model, hole: 'BimElement', parent_min: tuple, parent_center: tuple, cache: EntityCache, parent_max: tuple = None, is_cut: bool = True, *, frame: Optional[HostFrame] = None):
     """
     Create a boolean-operand solid positioned in the host's local frame.
@@ -5202,17 +5211,23 @@ def _create_hole_solid_local(model, hole: 'BimElement', parent_min: tuple, paren
     ``parent_max`` defaults to the mirror of ``parent_min`` about
     ``parent_center`` (the historical centered-box assumption).
 
-    An operand that cannot be built returns None with a loud warning. An
-    operand that displacement INFERRED (it carries ``_carve_pair``) raises
-    :class:`~lite_step.compiler.displacement.DisplacementError` instead: the
-    carve report already promised that carve, so dropping it would be silent.
+    An operand of an unsupported type raises :class:`UnsupportedOperandError`
+    — or, when displacement INFERRED it (it carries ``_carve_pair``),
+    :class:`~lite_step.compiler.displacement.DisplacementError` naming the
+    pair, because the carve report already promised that carve. A degenerate
+    but supported operand returns None, warned about at its build site.
     """
     if frame is None:
         frame = HostFrame.translation(parent_center)
-    base = _create_operand_base_solid(model, hole, parent_min, parent_center, cache,
-                                      parent_max=parent_max, is_cut=is_cut,
-                                      frame=frame)
     pair = getattr(hole, "_carve_pair", None)
+    try:
+        base = _create_operand_base_solid(model, hole, parent_min, parent_center, cache,
+                                          parent_max=parent_max, is_cut=is_cut,
+                                          frame=frame)
+    except UnsupportedOperandError:
+        if pair is None:
+            raise
+        base = None
     if base is None:
         if pair is not None:
             from lite_step.compiler.displacement import DisplacementError
@@ -5320,12 +5335,10 @@ def _create_operand_base_solid(model, hole: 'BimElement', parent_min: tuple, par
 
     # Guard: anything else without start/end cannot be read as a box.
     if not hasattr(hole, 'start') or hole.start is None or not hasattr(hole, 'end') or hole.end is None:
-        logger.warning(
-            "unsupported boolean operand %s %r skipped — operands must be "
-            "one of: %s",
-            type(hole).__name__, _operand_label(hole), _SUPPORTED_OPERANDS,
-        )
-        return None
+        raise UnsupportedOperandError(
+            f"unsupported boolean operand {type(hole).__name__} "
+            f"{_operand_label(hole)!r} — operands must be one of: "
+            f"{_SUPPORTED_OPERANDS}. A Mesh is carved, never carves.")
 
     if not frame.is_translation:
         return _box_operand_in_frame(model, hole, frame, parent_min, parent_max,
@@ -5505,11 +5518,10 @@ def _contour_extrude_operand(model, elem, frame: HostFrame):
     """
     ef = _extrude_frame(elem)
     if ef is None or not ef[5] or ef[5] <= 0:
-        logger.warning(
-            "unsupported boolean operand Extrude %r skipped — it has %s",
-            _operand_label(elem),
-            "fewer than 3 contour points" if ef is None else "no thickness")
-        return None
+        raise UnsupportedOperandError(
+            f"unsupported boolean operand Extrude {_operand_label(elem)!r} — "
+            f"it has {'fewer than 3 contour points' if ef is None else 'no thickness'}, "
+            f"so there is no solid to cut with")
     centroid, x_axis, _y_axis, z_axis, contour_2d, thickness_m = ef
     points = [model.create_entity("IfcCartesianPoint", Coordinates=[p[0], p[1]])
               for p in contour_2d]
