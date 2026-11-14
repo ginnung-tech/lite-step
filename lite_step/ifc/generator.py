@@ -1718,7 +1718,7 @@ def generate_ifc(
         remap_manifest(model, stabilise_global_ids(model), LITESTEP_META_PSET_NAME)
 
         # Serialize to string
-        ifc_content = _model_to_string(model)
+        ifc_content = _model_to_string(model, drop_ids=cache.purged_ids)
 
         # Post-process: deduplicate entities created by ifcopenshell internals,
         # and drop the Product geometry purge's condemned ids in the same pass
@@ -1726,7 +1726,7 @@ def generate_ifc(
         # `_share_product_geometry`).
         from lite_step.ifc.deduplicator import deduplicate_ifc_step
         ifc_content, dedup_stats = deduplicate_ifc_step(
-            ifc_content, drop_ids=cache.purged_ids)
+            ifc_content, dropped_ids=cache.purged_ids)
         stats["dedup"] = dedup_stats
         # Who carved whom — what the FILE holds. Displacement direction is
         # authoring order, and this line is the only place a diff or a
@@ -4329,7 +4329,21 @@ def _create_roof(model, context, roof: Roof, cache: EntityCache):
     return ifc_roof
 
 
-def _model_to_string(model) -> str:
+def _without_lines(step: str, ids) -> str:
+    """``step`` with the ``#id=`` lines of ``ids`` left out (one entity per line, as ifcopenshell writes)."""
+    if not ids:
+        return step
+    kept = []
+    for line in step.split("\n"):
+        if line.startswith("#"):
+            end = line.find("=")
+            if end > 1 and line[1:end].isdigit() and int(line[1:end]) in ids:
+                continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _model_to_string(model, drop_ids=None) -> str:
     """
     Serialize ifcopenshell model to STEP string.
 
@@ -4337,12 +4351,18 @@ def _model_to_string(model) -> str:
     IfcOpenShell's C++ serializer emits raw full-precision doubles, so the
     result is passed through ``normalize_step_floats`` —
     bit-exact re-encoding to shortest STEP reals, geometry unchanged.
+
+    ``drop_ids`` (the Product geometry purge) are left out BEFORE the floats
+    are rewritten: on a 52-storey tower they are 55 of the 65 MB serialized,
+    and the rewrite and the deduplicator would otherwise read them only to
+    throw them away. The deduplicator still checks that nothing kept refers
+    to them.
     """
     from lite_step.ifc.step_writer import normalize_step_floats
 
     # Try direct serialization first (newer ifcopenshell versions)
     if hasattr(model, 'to_string'):
-        return normalize_step_floats(model.to_string())
+        return normalize_step_floats(_without_lines(model.to_string(), drop_ids))
 
     # Fallback to temp file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ifc', delete=False) as f:
@@ -4351,7 +4371,7 @@ def _model_to_string(model) -> str:
     try:
         model.write(temp_path)
         with open(temp_path, 'r', encoding='utf-8') as f:
-            return normalize_step_floats(f.read())
+            return normalize_step_floats(_without_lines(f.read(), drop_ids))
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
@@ -4537,7 +4557,7 @@ def _identity_transformation_operator(model, cache: EntityCache):
     )
 
 
-def _share_product_geometry(model, group, type_entity, occurrences, cache: EntityCache) -> None:
+def _share_product_geometry(model, group, type_entity, occurrences, cache: EntityCache, keys=None) -> None:
     """WS-B step 2 — one body per Product instead of one per occurrence.
 
     See the "Geometry sharing" header in :mod:`lite_step.ifc.product_types` for
@@ -4550,7 +4570,7 @@ def _share_product_geometry(model, group, type_entity, occurrences, cache: Entit
     )
 
     adapter = _ModelShapeAdapter(model)
-    plan = plan_shared_geometry(group, occurrences, adapter)
+    plan = plan_shared_geometry(group, occurrences, adapter, keys)
     if not plan:
         return
 
@@ -4636,6 +4656,17 @@ def _emit_product_types(model, proj, cache: EntityCache) -> None:
         if product.Name and product.Name not in by_name:
             by_name[product.Name] = product
 
+    # The DSL elements by canonical name, for the body keys (product_types.occurrence_body_key).
+    from lite_step.ifc import product_types as _pt
+    elements: dict = {}
+    todo = [e for s in proj.storeys for e in s.elements] + list(getattr(proj, "sites", None) or [])
+    while todo:
+        e = todo.pop()
+        name = getattr(e, "ifc_name", None)
+        if name:
+            elements.setdefault(name, e)
+        todo.extend(getattr(e, "_elements", None) or [])
+
     for group in groups:
         occurrences, missing = [], []
         for canonical in group.occurrences:
@@ -4663,7 +4694,10 @@ def _emit_product_types(model, proj, cache: EntityCache) -> None:
         # off it, and after IfcRelDefinesByType because a Product whose
         # occurrences cannot all be resolved must fail on the count, which is
         # the older and more specific error.
-        _share_product_geometry(model, group, type_entity, occurrences, cache)
+        keys = ([(_pt.occurrence_body_key(elements[name]), _pt.occurrence_check(elements[name]))
+                 for name in group.occurrences]
+                if all(name in elements for name in group.occurrences) else None)
+        _share_product_geometry(model, group, type_entity, occurrences, cache, keys)
 
 
 def _emit_groupings(model, proj, cache: EntityCache) -> None:

@@ -472,6 +472,161 @@ class ShapeSlot:
                 f" ({self.owner_name or '<unnamed>'})")
 
 
+# ---------------------------------------------------------------------------
+# The body key: which occurrences will emit the same body, decided BEFORE
+# emission
+# ---------------------------------------------------------------------------
+
+#: Fields that place an occurrence without shaping it. ``placement`` goes into
+#: the ``ObjectPlacement``; its rotation is kept in the key all the same (see
+#: :func:`occurrence_body_key`).
+_IDENTITY_FIELDS = frozenset({"name", "id", "props", "placement"})
+
+#: Private lists that carry geometry into an element's body.
+_BODY_OPERANDS = ("_cuts", "_adds", "_intersects", "_voids", "_clips", "_openings")
+
+#: Coordinates are compared to a micrometre (metres, after normalize).
+_KEY_DECIMALS = 6
+
+
+def _walk_subtree(elem):
+    seen, todo = set(), [elem]
+    while todo:
+        e = todo.pop()
+        if id(e) in seen:
+            continue
+        seen.add(id(e))
+        yield e
+        todo.extend(getattr(e, "_elements", None) or [])
+
+
+def _received_inferred_carve(elem) -> bool:
+    """Whether displacement gave anything in ``elem``'s subtree a carve it did not author."""
+    return any(getattr(op, "_carve_pair", None) is not None
+               for e in _walk_subtree(elem)
+               for name in _BODY_OPERANDS
+               for op in (getattr(e, name, None) or ()))
+
+
+def _rounded(vector) -> List[float]:
+    return [round(float(c), _KEY_DECIMALS) + 0.0 for c in vector]
+
+
+def _opening_context(elem) -> Optional[dict]:
+    """What a Window/Door's body takes from its host besides its position.
+
+    An opening is the one anchored child that is NOT baked into world
+    coordinates: the emitter applies the host's orientation when it writes the
+    body. So two copies of one window in walls facing different ways are two
+    bodies, and the key must see the host's frame.
+    """
+    from lite_step.models.elements import Door, Window
+
+    if not isinstance(elem, (Window, Door)):
+        return None
+    frame = getattr(getattr(elem, "_parent", None), "_frame", None)
+    spec = getattr(elem, "_anchor_spec", None)
+    return {
+        "frame": None if frame is None else {
+            "along": _rounded(frame.along), "across": _rounded(frame.across), "up": _rounded(frame.up),
+            "rule": frame.rule, "thickness": round(float(frame.thickness), _KEY_DECIMALS) + 0.0},
+        "spec": None if spec is None else {"rotations": [list(r) for r in spec.rotations], "inset": spec.inset},
+    }
+
+
+def _relative_dump(elem) -> dict:
+    """The subtree as data, every point relative to its lowest corner: the slow, general key."""
+    def dump(e, seen):
+        if id(e) in seen:
+            return {"cycle": True}
+        seen.add(id(e))
+        d = (e.model_dump(mode="json", exclude=_IDENTITY_FIELDS, warnings=False) if hasattr(e, "model_dump")
+             else {"repr": repr(e)})
+        d["__type"] = type(e).__name__
+        d["__children"] = [dump(c, seen) for c in (getattr(e, "_elements", None) or [])]
+        for name in _BODY_OPERANDS:
+            d["__" + name] = [dump(o, seen) if hasattr(o, "model_dump") else repr(o)
+                              for o in (getattr(e, name, None) or [])]
+        return d
+
+    tree = dump(elem, set())
+    points: list = []
+
+    def collect(obj):
+        if isinstance(obj, dict):
+            if {"x", "y", "z"} <= obj.keys() and all(isinstance(obj[k], (int, float)) for k in "xyz"):
+                points.append(obj)
+            for v in obj.values():
+                collect(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                collect(v)
+
+    collect(tree)
+    if points:
+        lowest = [min(pt[k] for pt in points) for k in "xyz"]
+        for pt in points:
+            for k, low in zip("xyz", lowest):
+                pt[k] = round(pt[k] - low, _KEY_DECIMALS) + 0.0
+    return tree
+
+
+def occurrence_check(elem) -> Tuple:
+    """A cheap fact about an occurrence's body, independent of :func:`occurrence_body_key`.
+
+    Its extents in world axes (rounded to a millimetre's thousandth) and, for an
+    opening, the host's frame: a copy turned another way changes one or the
+    other. Every member of a key's group must agree on it, or the Product is
+    grouped by fingerprint instead. It is the guard that does not trust the
+    key: it is computed by different code from different data.
+    """
+    from lite_step.compiler.frames import element_aabb
+
+    box = element_aabb(elem)
+    extents = None if box is None else tuple(round(float(hi - lo), _KEY_DECIMALS) + 0.0
+                                            for lo, hi in zip(box[0], box[1]))
+    opening = _opening_context(elem)
+    return extents, None if opening is None else str(opening.get("frame"))
+
+
+def occurrence_body_key(elem) -> str:
+    """A digest equal for two occurrences of one Product exactly when they emit the same body.
+
+    Validation (:func:`~lite_step.models.product.find_diverged_occurrences`)
+    already guarantees every occurrence matches its Product's AUTHORED shape.
+    What can still differ by the time the body is written:
+
+    * how the copy is turned: a ``placement=`` rotation, or for an opening the
+      host's frame (:func:`_opening_context`);
+    * an ``.anchor()`` bake, which rewrites the copy's coordinates and does
+      not keep the rotation it applied; and
+    * a carve displacement inferred for this copy and not the others.
+
+    The first is cheap to state. For the other two the key falls back to the
+    whole subtree as data, points relative to its lowest corner
+    (:func:`_relative_dump`). Translation is never in the key: it goes into the
+    ``ObjectPlacement``.
+
+    Checked against the emitted-geometry fingerprint on 17 models with
+    Products and a 1,591-occurrence tower: no two occurrences with one key
+    emitted different bodies.
+    """
+    import json
+
+    if getattr(elem, "_anchor_resolved", False) or _received_inferred_carve(elem):
+        content = {"general": _relative_dump(elem), "opening": _opening_context(elem)}
+    else:
+        placement = getattr(elem, "placement", None)
+        content = {
+            "type": type(elem).__name__,
+            "product": getattr(elem, "_product_key", None),
+            "placement": (placement.model_dump(mode="json", exclude={"origin"}, warnings=False)
+                          if hasattr(placement, "model_dump") else None),
+            "opening": _opening_context(elem),
+        }
+    return hashlib.sha256(json.dumps(content, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
 def occurrence_shape_slots(occurrence, adapter: ShapeAdapter) -> List[ShapeSlot]:
     """Every shareable representation under ``occurrence``, deterministically.
 
@@ -594,8 +749,61 @@ class SharedShape:
         return (self.source,) + self.followers
 
 
+def _signature(slots, adapter) -> Tuple:
+    return tuple((slot.address, geometry_fingerprint(slot.rep, adapter)) for slot in slots)
+
+
+def _variants_by_key(group, occurrences, adapter, keys):
+    """Variants from the body keys, each checked against the fingerprint; ``None`` to fall back.
+
+    ``keys`` holds ``(occurrence_body_key, occurrence_check)`` per occurrence.
+    The key groups the occurrences without reading their emitted geometry. Two
+    guards check it: every member of a group must have the same
+    :func:`occurrence_check` (cheap, and computed by different code), and the
+    first and last member of each group must fingerprint alike. If either
+    fails, the key was wrong for this Product, and the caller groups it by
+    fingerprint as before (loudly). Groups whose first members fingerprint
+    alike are merged, so a key that splits more than needed loses no sharing.
+    """
+    by_key: Dict[str, List[Tuple[int, str, List[ShapeSlot]]]] = {}
+    check_of: Dict[str, Any] = {}
+    bodiless: List[str] = []
+    for index, (name, occurrence, (key, check)) in enumerate(zip(group.occurrences, occurrences, keys)):
+        slots = occurrence_shape_slots(occurrence, adapter)
+        if not slots:
+            bodiless.append(name)
+            continue
+        if check_of.setdefault(key, check) != check:
+            logger.warning(
+                "Product %r: occurrence %s shares a body key with others but not their extents; "
+                "grouping this Product by fingerprint instead (correct, slower). Please report it.",
+                group.key, name)
+            return None
+        by_key.setdefault(key, []).append((index, name, slots))
+    variants: Dict[Any, List[Tuple[int, str, List[ShapeSlot]]]] = {}
+    first_seen: Dict[Any, int] = {}
+    for members in by_key.values():
+        signature = _signature(members[0][2], adapter)
+        if len(members) > 1 and _signature(members[-1][2], adapter) != signature:
+            logger.warning(
+                "Product %r: occurrences %s and %s share a body key but not their geometry; "
+                "grouping this Product by fingerprint instead (correct, slower). Please report it.",
+                group.key, members[0][1], members[-1][1])
+            return None
+        variants.setdefault(signature, []).extend(members)
+        first_seen[signature] = min(first_seen.get(signature, members[0][0]), members[0][0])
+    # The order the fingerprint walk would have produced: variants by their
+    # first occurrence, members by theirs. It decides which body is the source
+    # and the order the mapped items are written in.
+    order = sorted(variants, key=first_seen.__getitem__)
+    ordered = {sig: [(name, slots) for _i, name, slots in sorted(variants[sig], key=lambda m: m[0])]
+               for sig in order}
+    return ordered, order, bodiless
+
+
 def plan_shared_geometry(
     group: "ProductTypeGroup", occurrences: Sequence[Any], adapter: ShapeAdapter,
+    keys: Optional[Sequence[str]] = None,
 ) -> List[SharedShape]:
     """Which representations become maps, and which slots point at them.
 
@@ -627,21 +835,27 @@ def plan_shared_geometry(
     if not occurrences:
         return []
 
-    variants: Dict[Any, List[Tuple[str, List[ShapeSlot]]]] = {}
-    order: List[Any] = []
-    bodiless: List[str] = []
-
-    for name, occurrence in zip(group.occurrences, occurrences):
-        slots = occurrence_shape_slots(occurrence, adapter)
-        if not slots:
-            bodiless.append(name)
-            continue
-        signature = tuple((slot.address, geometry_fingerprint(slot.rep, adapter))
-                          for slot in slots)
-        if signature not in variants:
-            variants[signature] = []
-            order.append(signature)
-        variants[signature].append((name, slots))
+    # ``keys`` (one :func:`occurrence_body_key` per occurrence) spares reading
+    # every occurrence's geometry: on a 52-storey tower that read was 13.5
+    # million values. Without keys, or when a key proves wrong, every
+    # occurrence is fingerprinted, as before.
+    by_key = _variants_by_key(group, occurrences, adapter, keys) if keys is not None else None
+    if by_key is not None:
+        variants, order, bodiless = by_key
+    else:
+        variants = {}
+        order = []
+        bodiless = []
+        for name, occurrence in zip(group.occurrences, occurrences):
+            slots = occurrence_shape_slots(occurrence, adapter)
+            if not slots:
+                bodiless.append(name)
+                continue
+            signature = _signature(slots, adapter)
+            if signature not in variants:
+                variants[signature] = []
+                order.append(signature)
+            variants[signature].append((name, slots))
 
     if bodiless:
         logger.warning(

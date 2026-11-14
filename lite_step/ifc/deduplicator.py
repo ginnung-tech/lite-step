@@ -88,6 +88,7 @@ def deduplicate_ifc_step(
     ifc_content: str,
     renumber: bool = False,
     drop_ids: Optional[Set[int]] = None,
+    dropped_ids: Optional[Set[int]] = None,
 ) -> Tuple[str, Dict[str, int]]:
     """
     Deduplicate entities in an IFC STEP string.
@@ -100,6 +101,10 @@ def deduplicate_ifc_step(
                   This is the Product geometry purge — see
                   :func:`_drop_purged` for why it happens HERE rather than
                   through ``ifcopenshell.file.remove``.
+        dropped_ids: Entity ids the caller already left out of
+                  ``ifc_content`` (the same purge, done on the text before the
+                  floats were rewritten). Checked like ``drop_ids``: nothing
+                  kept may refer to one.
 
     Returns:
         Tuple of (optimized_content, stats_dict)
@@ -120,7 +125,10 @@ def deduplicate_ifc_step(
     _normalize_floats(entities)
 
     # Build dependency graph
-    deps = _build_dependencies(entities)
+    absent: Set[int] = set()
+    deps = _build_dependencies(entities, absent)
+    if dropped_ids:
+        _assert_closed(absent, dropped_ids)
 
     # Topological sort (leaves first)
     sorted_ids = _topological_sort(entities, deps)
@@ -314,8 +322,27 @@ def _drop_purged(entities: Dict[int, Tuple[str, str]],
     return len(present)
 
 
-def _build_dependencies(entities: Dict[int, Tuple[str, str]]) -> Dict[int, Set[int]]:
-    """Build dependency graph: entity -> set of entity IDs it references."""
+def _assert_closed(absent: Set[int], dropped: Set[int]) -> None:
+    """Nothing kept may refer to an entity that was left out: see :func:`_drop_purged`.
+
+    ``absent`` is every id referenced but not present, gathered by
+    :func:`_build_dependencies` on its way.
+    """
+    dangling = sorted(absent & dropped)
+    if dangling:
+        raise ValueError(
+            f"purge set is not reference-closed: surviving entities refer to "
+            f"{len(dangling)} purged ones (e.g. {dangling[:5]}). "
+            "purgeable_after_sharing's fixpoint should make this "
+            "impossible — do not 'fix' this by widening the purge.")
+
+
+def _build_dependencies(entities: Dict[int, Tuple[str, str]],
+                        absent: Optional[Set[int]] = None) -> Dict[int, Set[int]]:
+    """Build dependency graph: entity -> set of entity IDs it references.
+
+    ``absent``, when given, collects every referenced id that is not present.
+    """
     deps = {}
     entity_ids = set(entities.keys())
     for eid, (etype, args) in entities.items():
@@ -324,6 +351,8 @@ def _build_dependencies(entities: Dict[int, Tuple[str, str]]) -> Dict[int, Set[i
             ref_id = int(m.group(1))
             if ref_id in entity_ids:
                 refs.add(ref_id)
+            elif absent is not None:
+                absent.add(ref_id)
         deps[eid] = refs
     return deps
 
