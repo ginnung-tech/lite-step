@@ -337,6 +337,32 @@ _LEAF_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 # BASE ELEMENT
 # =============================================================================
 
+def detached_copy(elem, **update):
+    """A deep copy of ``elem`` that never follows ``_parent``, with ``update``
+    applied like ``model_copy(update=)`` (no validation).
+
+    THE way to deep-copy an element. ``model_copy(deep=True)`` used to route
+    through the class's ``__deepcopy__`` (which drops the upward ``_parent``
+    pointer — see ``BimElement.__deepcopy__``); pydantic 2.14 copies
+    ``__pydantic_private__`` itself instead, so ``_parent`` is deep-copied and
+    one element's copy drags in its storey and every element under it.
+    Measured: a 829-carve model went from 15 s to 185 s on pydantic 2.14.0.
+    ``copy.deepcopy`` always calls our override, on every pydantic version.
+
+    No validation, on purpose: a post-normalize element holds float-metre
+    geometry in int-typed fields, which a re-validating copy would reject.
+    """
+    new = copy.deepcopy(elem)
+    for key, value in update.items():
+        new.__dict__[key] = value
+    if update:
+        fields_set = getattr(new, "__pydantic_fields_set__", None)
+        if fields_set is not None:
+            object.__setattr__(new, "__pydantic_fields_set__",
+                               set(fields_set) | set(update))
+    return new
+
+
 class BimElement(BaseModel):
     """
     Base class for all BIM elements.
