@@ -398,6 +398,29 @@ def _overlaps(a: Aabb, b: Aabb, eps: float = _EPS) -> bool:
     return all(d > eps for d in overlap_depths(a, b))
 
 
+def _overlap_candidates(lo: np.ndarray, hi: np.ndarray, j: int, eps: float = _EPS) -> List[int]:
+    """The indices ``i < j`` whose box may overlap box ``j``, ascending.
+
+    A broad phase for :func:`_overlaps`, vectorised: one NumPy pass instead of
+    ``j`` Python calls (7.7 million of them on a 52-storey tower, 7 s of its
+    compile). It may include extra indices and never drops one: the tolerance
+    here is a hair looser than ``eps``, and the caller still asks
+    :func:`_overlaps` of every index it gets, so the answer and its ORDER are
+    exactly the loop's over ``range(j)``.
+    """
+    if j == 0:
+        return []
+    depth = np.minimum(hi[:j], hi[j]) - np.maximum(lo[:j], lo[j])
+    return np.flatnonzero((depth > eps - 1e-9).all(axis=1)).tolist()
+
+
+def _box_arrays(boxes: List[Aabb]) -> Tuple[np.ndarray, np.ndarray]:
+    """``(lo, hi)`` of ``boxes`` as ``(n, 3)`` float arrays."""
+    lo = np.array([b[0] for b in boxes], dtype=np.float64).reshape(-1, 3)
+    hi = np.array([b[1] for b in boxes], dtype=np.float64).reshape(-1, 3)
+    return lo, hi
+
+
 def _contains(outer: Aabb, inner: Aabb, eps: float = _EPS) -> bool:
     """True when ``inner``'s AABB lies wholly inside ``outer``'s."""
     (o0, o1), (i0, i1) = outer, inner
@@ -671,6 +694,7 @@ def apply_displacement(project):
     # ``boolean_tree.balanced_union`` pairs POSITIONALLY. Then one pass per
     # placed subtree, over its own children in its own frame.
     for _frame_root, solids, meshes in frames:
+        lo, hi = _box_arrays([aabb for _, aabb in solids])
         for j, (occ, occ_aabb) in enumerate(solids):
             # SOLID hosts, earlier ones only. The direction rule is "later carves
             # earlier", so a host at index >= j never acts — scanning all of them
@@ -685,7 +709,7 @@ def apply_displacement(project):
             # append order, `mesh_carves` insertion order and the `pairs` list. The
             # first of those feeds `boolean_tree.balanced_union`, which pairs
             # operands POSITIONALLY — reordering it would move bytes and CSG depth.
-            for i in range(j):
+            for i in _overlap_candidates(lo, hi, j):
                 host, host_aabb = solids[i]
                 if not _overlaps(host_aabb, occ_aabb):
                     continue
