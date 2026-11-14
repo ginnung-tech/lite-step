@@ -176,7 +176,7 @@ is a loud refusal rather than unguarded execution.
 See [`tools/`](tools/) for editor and CAD tooling:
 - **VS Code Extension**: Compiler triggers, in-editor 3D Webview preview, and live push sync.
 - **Blender Add-on**: WebSocket bridge syncing IFC models into Blender 5.0+ with Bonsai and presentation PBR rendering.
-- **Lapin**: `lite-step lapin push model.py` links the compiled model into [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller, and reloads it on the next push; parameters edited in Lapin come back into the script.
+- **Lapin**: `lite-step lapin push model.py` links the compiled model into [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller, and reloads it on the next push. Parameters edited in Lapin come back into the script with `lite-step lapin pull model.py`, or by themselves under `push --watch`; a plain push does not pull, and replaces Lapin's values with the script's (it says which).
 
 ## Agents
 
