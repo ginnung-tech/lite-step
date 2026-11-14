@@ -1,9 +1,11 @@
 # Runtime dependencies for the Lite-STEP DSL and compiler.
 #
-#   pip install -r requirements.txt
+# To set up a checkout, use `pip install -e .` (README, "Start"): it installs
+# this list and the `lite-step` command. `pip install -r requirements.txt`
+# still works, for tools that only want the dependencies.
 #
-# Then work from the repo root — `python output.py`, or
-# `python -m lite_step <file>.py` for anything else.
+# pyproject.toml reads this file as the package's dependencies: one list.
+# Keep it to plain requirement lines (no `-e`, `-r` or other options).
 #
 # This list is exactly what `lite_step/` imports, verified by AST scan of every
 # module. Keep it that way: a dependency the DSL does not import belongs to

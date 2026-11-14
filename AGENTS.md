@@ -14,11 +14,13 @@ truth for the API.** Where this file disagrees with it, it wins.
 
 ## 1. Environment
 
-Work from the repo root — that is what puts `lite_step` on the import path.
-There is no `pip install -e .`; this repo is not packaged.
+Python 3.12 or newer, in a virtual environment (README, "Start"). From the
+repo root, `pip install -e .` installs the dependencies and the `lite-step`
+command, and makes `import lite_step` work from any folder. Without the
+install, work from the repo root: that is what puts `lite_step` on the path.
 
 ```bash
-pip install -r requirements.txt   # plus pytest, ruff and ty to run the checks below
+pip install -e .                  # plus pytest, ruff and ty to run the checks below
 
 ruff check output.py              # lint — fix before compiling
 ty check output.py                # types — when a signature changed
