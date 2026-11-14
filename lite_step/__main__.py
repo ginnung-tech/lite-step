@@ -31,7 +31,28 @@ from pathlib import Path
 from lite_step.compiler.executor import compile_main, LiteStepCompileError
 
 
+def _run_tool(name: str, argv: list[str]) -> int:
+    """``lite-step <tool> …``: a tool from this checkout's ``tools/`` folder.
+
+    Tools talk to other programs (Lapin, Blender) and are not part of the
+    compiler, so a copy of ``lite_step`` installed without ``tools/`` has none.
+    """
+    cli = Path(__file__).resolve().parent.parent / "tools" / name / "cli.py"
+    if not cli.is_file():
+        print(
+            f"error: `lite-step {name}` needs the tools folder of a Lite-STEP checkout "
+            f"(looked for {cli}). Get it from https://github.com/ginnung-tech/lite-step.",
+            file=sys.stderr,
+        )
+        return 2
+    return int(runpy.run_path(str(cli), run_name="__lite_step_tool__")["main"](argv) or 0)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "lapin":
+        return _run_tool("lapin", argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="lite-step",
         description="Compile a Lite-STEP output.py file to IFC4.",

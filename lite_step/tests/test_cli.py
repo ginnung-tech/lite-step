@@ -22,6 +22,7 @@ the test measure this checkout on every machine.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -170,3 +171,33 @@ def test_cli_does_not_double_compile(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.count("wrote ") == 1, proc.stdout
+
+
+# --------------------------------------------------------------------------- lite-step lapin
+
+
+def test_lapin_ops_says_what_each_element_becomes_and_writes_nothing_beside_the_source(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    model = _write_model(tmp_path)
+    out = tmp_path / "ops.json"
+    assert main(["lapin", "ops", str(model), "-o", str(out)]) == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert (data["format"], data["version"]) == ("lite-step.lapin-ops", 1)
+    (op,) = data["ops"]
+    assert op["kind"] == "primitive"
+    assert op["args"] == {"shape": "box", "at": [2.0, 1.5, 0.0], "rotation": 0.0,
+                          "width": 4.0, "length": 3.0, "height": 2.4}
+    assert "1  editable boxes and cylinders" in capsys.readouterr().err
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["ops.json", "output.py"], "no output.ifc left behind"
+
+
+def test_lapin_without_the_tools_folder_says_where_to_get_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """An installed copy of the compiler has no tools/; that must be said, not a traceback."""
+    import lite_step.__main__ as cli
+
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "lite_step" / "__main__.py"))
+    assert main(["lapin", "ops", "model.py"]) == 2
+    assert "needs the tools folder of a Lite-STEP checkout" in capsys.readouterr().err
