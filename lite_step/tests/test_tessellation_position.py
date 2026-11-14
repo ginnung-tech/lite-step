@@ -16,6 +16,9 @@ asserts vertex COUNT (``len(verts) < 20000``, the 443k-vert donut regression)
 — and a reflected mesh has exactly the right count. Position was never
 checked. That is the real lesson: a metric that cannot distinguish right from
 mirrored is not a guard.
+
+ifcopenshell 0.9 fixed the evaluation: Pipe and Bar now come back where they
+were authored. The guard is kept and tested directly on a reflected mesh.
 """
 import numpy as np
 import pytest
@@ -53,7 +56,8 @@ def _sweep():
         name="s")
 
 
-@pytest.mark.parametrize("factory", [_sweep, _revolve], ids=["sweep", "revolve"])
+@pytest.mark.parametrize("factory", [_sweep, _revolve, _pipe, _bar],
+                         ids=["sweep", "revolve", "pipe", "bar"])
 def test_correct_tessellations_are_accepted(factory):
     """The guard must not cost us the shapes that DO work.
 
@@ -66,58 +70,53 @@ def test_correct_tessellations_are_accepted(factory):
     assert verts.min(axis=0)[0] > 0, "and it must be on the positive side"
 
 
+# ifcopenshell 0.9 (now the floor in requirements.txt) evaluates Pipe and Bar
+# in the right place, so the kernel no longer produces the reflected mesh this
+# guard was written for — Pipe and Bar are in the accepted set above. The
+# guard stays: a position check costs nothing and is the only thing between a
+# misplaced tessellation and a carve in the wrong place. It is now exercised
+# directly, on the reflection the 0.8 kernel used to produce.
+
+
+def _reflected(verts):
+    return -np.asarray(verts)
+
+
 @pytest.mark.parametrize("factory", [_pipe, _bar], ids=["pipe", "bar"])
-def test_reflected_tessellations_are_refused_not_returned(factory):
-    """Rather than hand back a mirrored mesh, return the established
-    "could not tessellate" signal.
+def test_a_reflected_mesh_is_refused(factory):
+    import lite_step.ifc.generator as gen
 
-    ``None`` is what every caller already handles —
-    ``displacement._occupant_mesh`` turns it into a loud ``DisplacementError``
-    and ``BimElement._query_triangles`` into a ``ValueError``. Loud failure
-    over silent degradation: a carve that fails to happen is visible in the
-    render, a carve in the wrong place is not.
-
-    If this test starts FAILING, the upstream evaluation has been fixed —
-    delete the guard and this file rather than loosening either.
-    """
-    assert tessellate_solid_to_mesh(factory()) is None
+    elem = factory()
+    verts = np.asarray(tessellate_solid_to_mesh(elem)[0])
+    assert gen._mesh_is_where_it_should_be(elem, verts), "fixture: the real mesh passes"
+    assert not gen._mesh_is_where_it_should_be(elem, _reflected(verts))
 
 
 def test_the_refusal_is_logged_with_the_diagnosis(caplog):
-    """A silent ``None`` would just move the mystery. The warning names the
+    """A silent refusal would just move the mystery. The warning names the
     mesh centre, the authored centre, and the reflection signature."""
     import logging
 
+    import lite_step.ifc.generator as gen
+
+    elem = _pipe()
+    verts = np.asarray(tessellate_solid_to_mesh(elem)[0])
     with caplog.at_level(logging.WARNING, logger="lite_step.ifc.generator"):
-        tessellate_solid_to_mesh(_pipe())
+        gen._mesh_is_where_it_should_be(elem, _reflected(verts))
     text = caplog.text
     assert "outside its authored extent" in text
     assert "POINT-REFLECTED THROUGH THE ORIGIN" in text
     assert "Refusing the mesh" in text
 
 
-def test_a_vertex_count_check_could_not_have_caught_this():
-    """Why the existing guard missed it, pinned so nobody re-derives it.
-
-    The reflected mesh is a perfectly good mesh — right vertex count, right
-    topology, right size. Only its position is wrong. Any assertion on count
-    or extent-magnitude passes.
-    """
-    import lite_step.ifc.generator as gen
-
-    # Reach past the guard to see what the kernel actually returned.
-    real = gen._mesh_is_where_it_should_be
-    gen._mesh_is_where_it_should_be = lambda elem, verts: True
-    try:
-        mesh = tessellate_solid_to_mesh(_pipe())
-    finally:
-        gen._mesh_is_where_it_should_be = real
-
-    assert mesh is not None
-    verts = np.asarray(mesh[0])
-    assert len(verts) < 20_000, "a bare count assertion passes on it"
-    size = verts.max(axis=0) - verts.min(axis=0)
-    assert round(float(size[0])) == 2000, "so does its SIZE — 2 m of pipe"
+def test_a_vertex_count_check_could_not_have_caught_a_reflection():
+    """Why the old count-only guard missed it, pinned so nobody re-derives it:
+    a reflected mesh has the right vertex count and the right size. Only its
+    position is wrong."""
+    verts = np.asarray(tessellate_solid_to_mesh(_pipe())[0])
+    flipped = _reflected(verts)
+    assert len(flipped) == len(verts) < 20_000
+    size = flipped.max(axis=0) - flipped.min(axis=0)
+    assert round(float(size[0])) == 2000, "2 m of pipe"
     assert round(float(size[1])) == 200, "and its diameter"
-    # ...and yet it is on the wrong side of the origin entirely.
-    assert verts.max(axis=0)[0] < 0
+    assert flipped.max(axis=0)[0] < 0, "on the wrong side of the origin"

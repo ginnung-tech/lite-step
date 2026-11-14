@@ -429,7 +429,7 @@ def test_named_void_emits_a_named_opening_with_a_canonical_path():
     assert openings[0].Name == "opening:doorway:wall:north"
     assert len(model.by_type("IfcRelVoidsElement")) == 1
     # Still no fill: named x UNFILLED is the cell this occupies.
-    assert model.by_type("IfcRelFillsElement") == []
+    assert not model.by_type("IfcRelFillsElement")
 
 
 def test_an_unnamed_void_stays_anonymous():

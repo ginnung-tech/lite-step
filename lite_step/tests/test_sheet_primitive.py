@@ -137,7 +137,7 @@ def test_sheet_emits_one_extrusion_over_a_closed_profile():
     assert profile.is_a("IfcArbitraryClosedProfileDef"), profile.is_a()
     assert profile.OuterCurve.is_a("IfcPolyline")
 
-    assert model.by_type("IfcCenterLineProfileDef") == []
+    assert not model.by_type("IfcCenterLineProfileDef")
     assert "IFCCENTERLINEPROFILEDEF" not in raw.upper()
 
 
@@ -398,7 +398,7 @@ def test_sheet_costs_no_booleans():
     assert report.max_depth == 0, report.stats_line()
 
     model, _ = compile_project(proj)
-    assert model.by_type("IfcBooleanResult") == []
+    assert not model.by_type("IfcBooleanResult")
 
 
 class TestSheetIsNotATypeAndSaysSo:

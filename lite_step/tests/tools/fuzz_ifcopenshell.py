@@ -161,7 +161,9 @@ def build_suite_swept_disk() -> list[FuzzCase]:
         builder=case_bar_void_middle,
         expected_vol_min=bar_vol_1300 * 0.95,
         expected_vol_max=bar_vol_1300 * 1.05,
-        is_known_bug=True,
+        # Was the upstream trim-the-directrix defect (IfcOpenShell#9256);
+        # fixed in ifcopenshell 0.9, which requirements.txt now requires.
+        is_known_bug=False,
         known_bug_ref="https://github.com/IfcOpenShell/IfcOpenShell/issues/9256",
     ))
 
@@ -183,7 +185,9 @@ def build_suite_swept_disk() -> list[FuzzCase]:
         builder=case_bar_void_top,
         expected_vol_min=bar_vol_1800 * 0.95,
         expected_vol_max=bar_vol_1800 * 1.05,
-        is_known_bug=True,
+        # Was the upstream trim-the-directrix defect (IfcOpenShell#9256);
+        # fixed in ifcopenshell 0.9, which requirements.txt now requires.
+        is_known_bug=False,
         known_bug_ref="https://github.com/IfcOpenShell/IfcOpenShell/issues/9256",
     ))
 
@@ -222,7 +226,9 @@ def build_suite_swept_disk() -> list[FuzzCase]:
         builder=case_pipe_void,
         expected_vol_min=pipe_vol_1300 * 0.95,
         expected_vol_max=pipe_vol_1300 * 1.05,
-        is_known_bug=True,
+        # Was the upstream trim-the-directrix defect (IfcOpenShell#9256);
+        # fixed in ifcopenshell 0.9, which requirements.txt now requires.
+        is_known_bug=False,
         known_bug_ref="https://github.com/IfcOpenShell/IfcOpenShell/issues/9256",
     ))
 
