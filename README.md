@@ -117,11 +117,14 @@ warns loudly and names the fix. `.add(child, carve="none")` opts out.
 `ROOF_PITCH_DEG = param(45, "deg", "Roof pitch")` (`from lite_step import
 param`): the script still sees `45`, and tools can list and edit it. Lapin
 shows them as project parameters and writes an edit back into that one line
-(see [`tools/`](tools/)). A handful of real design choices per model, not every
-coordinate; the examples show how many.
+(see [`tools/`](tools/)). Write the assignment at module
+scope with a plain literal (a computed value is shown but cannot be edited),
+and choose values the model really is built from: a parameter must still
+compile when it is changed. A handful per model, not every coordinate; the
+examples show how many.
 
-**GlobalIds are stable.** Each element's GlobalId is derived from its canonical
-name and the project's name, so compiling the same model again gives the same
+**GlobalIds are stable.** Each named element's GlobalId is derived from its
+canonical name and the project's name (an unnamed one's from what it belongs to), so compiling the same model again gives the same
 ids, and tools that keep hold of an element (a Lapin link, a BCF topic) keep
 it. Renaming or moving an element changes its path, and so its id.
 

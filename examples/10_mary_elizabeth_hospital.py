@@ -118,13 +118,13 @@ if ALUMINIUM not in dk.MATERIALS:
     )
 
 # ── Finger & Grid Geometry ─────────────────────────────────────────────────
-WING_COUNT = param(5, "", "Wings")
-ARM_WIDTH = param(24000, "mm", "Wing width")
+WING_COUNT = 5
+ARM_WIDTH = 24000
 ARM_REACH = param(60000, "mm", "Wing length")
 ARM_HALF = ARM_WIDTH // 2
 CAP_X = ARM_REACH - ARM_HALF  # 48000
 PITCH = 36000 // WING_COUNT  # 7200 centidegrees = 72.0 deg
-STOREY_HEIGHT = param(4200, "mm", "Storey height")
+STOREY_HEIGHT = 4200
 SLAB_T = 275
 WING_STOREYS = [6, 5, 4, 5, 4]
 ATRIUM_RADIUS = param(9000, "mm", "Atrium radius")

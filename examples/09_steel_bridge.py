@@ -263,7 +263,7 @@ UC = LH / 2
 DECK_ARCH_CLEARANCE = param(4000, "mm", "Clearance under the arch")
 Z_CROWN = z_deck(UC) - DECK_DEPTH - DECK_ARCH_CLEARANCE
 ARCH_DEPTH = 6000
-N_PANEL = param(12, "", "Arch panels")
+N_PANEL = 12
 
 #: Rise / span of the arch. The High Steel Bridge is close to 1:3.7, which is the
 #: usual band for a riveted steel truss deck arch: flatter and the thrust at the

@@ -43,7 +43,7 @@ I = lambda x: int(round(x))  # noqa: E731,E741
 # ── Global Stellarator Parameters (W7-X Scale) ───────────────────────────
 
 R0 = param(5_500, "mm", "Major radius")           # Major radius of the torus (mm)
-N_P = param(5, "", "Field periods")              # Number of toroidal field periods (5-fold symmetry)
+N_P = 5              # Number of toroidal field periods (5-fold symmetry)
 TOTAL_COILS = param(50, "", "Modular coils")     # Total modular coils in full 360-degree torus (10 per period)
 
 # Plasma core geometry

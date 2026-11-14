@@ -60,7 +60,7 @@ I = lambda x: int(round(x))  # noqa: E731,E741
 # ── Machine parameters (W7-X scale, mm) ──────────────────────────────────
 R0 = param(5_500, "mm", "Major radius")          # major radius
 A_COIL = 1_600      # helical winding minor radius
-N_P = param(5, "", "Field periods")             # field periods / helical turns
+N_P = 5             # field periods / helical turns
 L = 2               # l pairs -> 2l conductors
 
 PLASMA_A = param(400, "mm", "Plasma semi-axis a")      # ellipse semi-axis (mm)

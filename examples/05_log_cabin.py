@@ -16,9 +16,9 @@ I = lambda x: int(round(x))  # noqa: E731
 
 RANDOM_SEED = int(time.time())
 
-CABIN_LENGTH = param(6000.0, "mm", "Cabin length")
-CABIN_WIDTH = param(4000.0, "mm", "Cabin width")
-CORNER_OVERHANG = param(250.0, "mm", "Log overhang at the corners")
+CABIN_LENGTH = param(6000, "mm", "Cabin length")
+CABIN_WIDTH = param(4000, "mm", "Cabin width")
+CORNER_OVERHANG = param(250, "mm", "Log overhang at the corners")
 
 LOG_LEN_LONG = CABIN_LENGTH + 2.0 * CORNER_OVERHANG
 LOG_LEN_SHORT = CABIN_WIDTH + 2.0 * CORNER_OVERHANG
@@ -29,7 +29,7 @@ NUM_THETA_SEGS = 36
 
 LOG_R_BUTT_MIN, LOG_R_BUTT_MAX = 170.0, 195.0
 LOG_R_TIP_MIN, LOG_R_TIP_MAX = 155.0, 175.0
-AVG_LOG_DIAMETER = param(350.0, "mm", "Average log diameter")
+AVG_LOG_DIAMETER = param(350, "mm", "Average log diameter")
 WALL_Z_RAISE = AVG_LOG_DIAMETER / 2.0
 
 SLAB_EXTEND = 150.0

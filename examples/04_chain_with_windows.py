@@ -26,11 +26,11 @@ I = lambda x: int(round(x))  # noqa: E731,E741
 
 
 # ── Murermestervilla Window Specification ──────────────────────────────────
-KARM_DEPTH = param(120, "mm", "Window frame depth")
+KARM_DEPTH = 120
 KARM_FACE = 45
 POST_DEPTH = 120
 POST_FACE = 45
-SASH_DEPTH = param(70, "mm", "Sash depth")
+SASH_DEPTH = 70
 SASH_FACE = 45
 SASH_LAP = 12
 FIT_GAP = 10
