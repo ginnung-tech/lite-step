@@ -1,8 +1,42 @@
-# pyproject.toml — tool config only.
+# pyproject.toml — Lite-STEP as an installable package, plus tool config.
 #
-# This repo is not an installable package by design. Dependencies come from
-# `requirements.txt`; you work from the repo root and run `python output.py`
-# (or `python -m lite_step <file>.py`).
+#   pip install -e .        # from the repo root, inside a virtual environment
+#
+# installs the dependencies and the `lite-step` command, and makes
+# `import lite_step` work from any folder. Editable (-e) on purpose: the
+# package stays this checkout, so an edit here takes effect at once and the
+# tools in tools/ (which are not part of the package) are found beside it.
+#
+# The dependency list itself is requirements.txt, read below, so there is
+# one list. Do not put `-e .` in requirements.txt: pip reads it against the
+# folder it is run from, and the groa pack's CI installs this file from
+# another folder (`pip install -r lite-step/requirements.txt`).
+
+[build-system]
+requires = ["setuptools>=77"]   # 77: `license` as an SPDX string
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lite-step"
+version = "0.1.0"
+description = "A strict Python DSL for buildings that compiles to IFC4X3 STEP."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"   # numpy>=2.5 needs 3.12
+dynamic = ["dependencies"]
+
+[project.scripts]
+lite-step = "lite_step.__main__:main"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["lite_step*"]
+
+[tool.setuptools.package-data]
+# Textures, styles, the presentation .blend, material notes: read at run time.
+lite_step = ["assets/**/*", "**/*.md"]
 
 # ---------------------------------------------------------------------------
 # pytest config so a fresh ``pytest`` invocation from the repo root

@@ -31,14 +31,68 @@ if __name__ == "__main__":
 
 ## Start
 
+You need **Python 3.12 or newer** ([python.org](https://www.python.org/downloads/);
+on Windows, tick *Add python.exe to PATH* in the installer) and **git**.
+
+**1. Get the code**
+
 ```bash
-pip install -r requirements.txt
-python output.py                    # → output.ifc beside it
+git clone https://github.com/ginnung-tech/lite-step.git
+cd lite-step
 ```
 
-`output.py` at the repo root is the seed you edit. Work **from the repo root** —
-that is what puts `lite_step` on the import path. For any other file, use
-`python -m lite_step <file>.py`.
+**2. Make a virtual environment** (once). It keeps Lite-STEP's packages apart
+from the rest of your computer.
+
+```bash
+python -m venv .venv
+```
+
+**3. Turn it on** (every time you open a new terminal). The prompt then starts
+with `(.venv)`.
+
+| Shell | Command |
+|---|---|
+| Windows PowerShell | `.venv\Scripts\Activate.ps1` |
+| Windows Command Prompt | `.venv\Scriptsctivate.bat` |
+| macOS, Linux | `source .venv/bin/activate` |
+
+PowerShell may refuse the first one with *running scripts is disabled on this
+system*. Allow scripts you made yourself, once, then try again:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+**4. Install Lite-STEP and its dependencies** (once, and again after a
+`git pull` that changes `requirements.txt`):
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+The `-e` keeps the package as this folder, so `git pull` updates it with no
+reinstall.
+
+**5. Build the seed model**
+
+```bash
+lite-step output.py                 # → output.ifc beside it
+```
+
+`output.py` at the repo root is the seed you edit; any model file works the
+same way (`lite-step path/to/house.py`), from any folder. `python output.py`
+and `python -m lite_step <file>.py` do the same.
+
+In VS Code, pick the environment once: *Python: Select Interpreter* → the one
+in `.venv`. New terminals then turn it on by themselves.
+
+| You see | It means |
+|---|---|
+| `lite-step: command not found` / `is not recognized` | The environment is not on: step 3 |
+| `ModuleNotFoundError: No module named 'lite_step'` | Step 4 was run in another environment, or not at all |
+| `No matching distribution found for numpy` (or `ifcopenshell`) | Your Python is older than 3.12, or 32-bit: `python --version`, then make `.venv` again with a newer one |
 
 ## Modelling
 
