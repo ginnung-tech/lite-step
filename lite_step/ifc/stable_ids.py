@@ -33,13 +33,20 @@ import ifcopenshell.guid
 NAMESPACE = uuid.UUID("5c0f8a52-3b1e-4d6a-9e2f-7a41c8d0b913")
 
 
-def _refs(entity) -> list:
-    """The IfcRoot entities an entity refers to, attribute by attribute."""
+def _sides(entity) -> list:
+    """The IfcRoot entities an entity refers to, one list per attribute (a relationship's sides)."""
     out = []
     for value in entity:
         items = value if isinstance(value, (tuple, list)) else (value,)
-        out.extend(v for v in items if isinstance(v, ifcopenshell.entity_instance) and v.is_a("IfcRoot"))
+        side = [v for v in items if isinstance(v, ifcopenshell.entity_instance) and v.is_a("IfcRoot")]
+        if side:
+            out.append(side)
     return out
+
+
+def _refs(entity) -> list:
+    """The IfcRoot entities an entity refers to, attribute by attribute."""
+    return [v for side in _sides(entity) for v in side]
 
 
 def stabilise_global_ids(model) -> dict:
@@ -52,12 +59,17 @@ def stabilise_global_ids(model) -> dict:
     properties = [e for e in roots if e.is_a("IfcPropertyDefinition")]
     relations = [e for e in roots if e.is_a("IfcRelationship")]
 
-    # Who is related to whom, read once from the relationships.
+    # Who is related to whom, read once from the relationships: across a relationship's
+    # sides only (an element and the storey containing it), never among the members of
+    # one side. Siblings say nothing about an entity, and a storey's 4,000 elements
+    # would each get the 3,999 others: 16 million entries and half a minute.
     neighbours: dict = {}
     for rel in relations:
-        ends = _refs(rel)
-        for a in ends:
-            neighbours.setdefault(a.id(), set()).update(b.id() for b in ends if b.id() != a.id())
+        sides = [[v.id() for v in side] for side in _sides(rel)]
+        for i, side in enumerate(sides):
+            across = [x for j, other in enumerate(sides) if j != i for x in other]
+            for a in side:
+                neighbours.setdefault(a, set()).update(across)
 
     key: dict = {}
 

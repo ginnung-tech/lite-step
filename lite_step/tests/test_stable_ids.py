@@ -94,3 +94,26 @@ def test_ids_are_valid_ifc_globalids():
     for e in _compile(_model()).by_type("IfcRoot"):
         assert len(e.GlobalId) == 22
         ifcopenshell.guid.expand(e.GlobalId)  # raises on a malformed id
+
+
+def test_an_unnamed_entity_keeps_its_id_when_an_element_is_added_beside_it():
+    """Its id comes from what it belongs to (the storey), never from its siblings."""
+    model = ifcopenshell.file(schema="IFC4X3")
+    new = ifcopenshell.guid.new
+    project = model.create_entity("IfcProject", GlobalId=new(), Name="p")
+    storey = model.create_entity("IfcBuildingStorey", GlobalId=new(), Name="storey:ground")
+    model.create_entity("IfcRelAggregates", GlobalId=new(), RelatingObject=project, RelatedObjects=[storey])
+    contains = model.create_entity("IfcRelContainedInSpatialStructure", GlobalId=new(),
+                                   RelatingStructure=storey, RelatedElements=[])
+
+    def element(name=None):
+        e = model.create_entity("IfcBuildingElementProxy", GlobalId=new(), Name=name)
+        contains.RelatedElements = [*contains.RelatedElements, e]
+        return e
+
+    first = [element() for _ in range(3)]
+    stabilise_global_ids(model)
+    before = [e.GlobalId for e in first]
+    element("box:shed:storey:ground")
+    stabilise_global_ids(model)
+    assert [e.GlobalId for e in first] == before
