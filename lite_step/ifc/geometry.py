@@ -494,7 +494,10 @@ _WELD_EPS_MIN = 1e-12
 
 
 #: Above this many candidate pairs the check below gives up and the loop decides.
-_WELD_CANDIDATES_MAX = 4_000_000
+#: It bounds the temporary arrays (indices and coordinate differences, about
+#: 100 bytes a pair) to some 50 MB: a mesh with thousands of vertices on one x
+#: plane would otherwise allocate hundreds of MB to prove nothing merges.
+_WELD_CANDIDATES_MAX = 500_000
 
 
 def _nothing_within(v: np.ndarray, eps: float) -> bool:

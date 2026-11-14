@@ -1072,6 +1072,9 @@ def compile_main(
     Args:
         result: The Project to compile. Defaults to caller's ``result``
             module-global. Raises TypeError if neither is provided.
+            ``compile_main`` converts this Project to metres in place: do not
+            reuse it after the call, also not after a failed generation or
+            write. Run the model again for a second compile.
         source_path: Path to derive output dir from. Defaults to
             caller's ``__file__`` module-global.
         output_name: Filename written next to source. ``"output.ifc"``
