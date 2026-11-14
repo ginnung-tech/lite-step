@@ -90,11 +90,12 @@ def test_default_name_is_none_identical_ifc():
     assert Window(width=1200, height=1400).name is None
     assert Window(width=1200, height=1400, name=None).name is None
 
-    # No source embedding (its meta is unrelated). Two things in emitted STEP
-    # vary by DESIGN on every compile and must be normalised, and ONLY these
-    # two: the random GlobalIds, and the FILE_NAME header timestamp (these two
-    # compiles run back to back, so they differ whenever they straddle a
-    # one-second tick — a real, independent flake, measured at 1 in 15).
+    # No source embedding (its meta is unrelated). One thing in emitted STEP
+    # varies by DESIGN on every compile and must be normalised, and ONLY this
+    # one: the FILE_NAME header timestamp (these two compiles run back to back,
+    # so they differ whenever they straddle a one-second tick — a real,
+    # independent flake, measured at 1 in 15). GlobalIds are compared as they
+    # are: they derive from the model (lite-step#9), so they must match too.
     #
     # Deliberately NOT normalised: set-valued attribute order. That was a third
     # source of drift until IfcUnitAssignment.Units was pinned in
@@ -103,7 +104,6 @@ def test_default_name_is_none_identical_ifc():
     # thing that catches one.
     import re
     def strip(s):
-        s = re.sub(r"'[0-9A-Za-z_$]{22}'", "'GUID'", s)
         return re.sub(r"(FILE_NAME\('',)'[^']*'", r"\1'<ts>'", s)
     a = strip(_compile(_building(wall_a), source=None))
     b = strip(_compile(_building(wall_b), source=None))

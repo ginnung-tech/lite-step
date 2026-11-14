@@ -22,7 +22,6 @@ the test measure this checkout on every machine.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -176,20 +175,83 @@ def test_cli_does_not_double_compile(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- lite-step lapin
 
 
-def test_lapin_ops_says_what_each_element_becomes_and_writes_nothing_beside_the_source(
-    tmp_path: Path, capsys: pytest.CaptureFixture
-) -> None:
+class _FakeLapin:
+    """Lapin's engine as the CLI sees it through `lapinbim`: links by path, and the calls it was sent."""
+
+    links: list = []
+    calls: list = []
+
+    def __init__(self, port=None, project=None):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def call(self, method, params=None, timeout=None):
+        _FakeLapin.calls.append((method, params))
+        if method == "project.importIfc":
+            assert params["mode"] == "link" and Path(params["path"]).is_file()
+            link = {"id": f"L{len(_FakeLapin.links) + 1}", "kind": "ifc", "path": params["path"],
+                    "elements": 1, "storeys": 1, "name": Path(params["path"]).stem}
+            _FakeLapin.links.append(link)
+            return {"linkId": link["id"]}
+        if method == "project.reloadLink":
+            assert any(x["id"] == params["id"] for x in _FakeLapin.links)
+            return {}
+        raise AssertionError(method)
+
+    def query(self, name, args=None):
+        assert name == "link.list"
+        return [dict(x) for x in _FakeLapin.links]
+
+    def execute(self, command, args):
+        _FakeLapin.calls.append((command, args))
+        assert command == "link.unlink"
+        _FakeLapin.links = [x for x in _FakeLapin.links if x["id"] != args["id"]]
+
+
+@pytest.fixture
+def fake_lapin(monkeypatch: pytest.MonkeyPatch):
+    import types
+
+    _FakeLapin.links, _FakeLapin.calls = [], []
+    module = types.SimpleNamespace(Lapin=_FakeLapin, LapinError=RuntimeError, engines=lambda: [])
+    monkeypatch.setitem(sys.modules, "lapinbim", module)
+    return _FakeLapin
+
+
+def test_lapin_push_links_the_compiled_model_then_reloads_it(tmp_path: Path, fake_lapin) -> None:
     model = _write_model(tmp_path)
-    out = tmp_path / "ops.json"
-    assert main(["lapin", "ops", str(model), "-o", str(out)]) == 0
-    data = json.loads(out.read_text(encoding="utf-8"))
-    assert (data["format"], data["version"]) == ("lite-step.lapin-ops", 1)
-    (op,) = data["ops"]
-    assert op["kind"] == "primitive"
-    assert op["args"] == {"shape": "box", "at": [2.0, 1.5, 0.0], "rotation": 0.0,
-                          "width": 4.0, "length": 3.0, "height": 2.4}
-    assert "1  editable boxes and cylinders" in capsys.readouterr().err
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["ops.json", "output.py"], "no output.ifc left behind"
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert (tmp_path / "output.ifc").is_file(), "compiled beside the source, as `lite-step output.py` does"
+    assert [m for m, _ in fake_lapin.calls] == ["project.importIfc"]
+
+    fake_lapin.calls.clear()
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert fake_lapin.calls == [("project.reloadLink", {"id": "L1"})], "the second push reloads the same link"
+    assert len(fake_lapin.links) == 1
+
+
+def test_lapin_push_of_another_folder_makes_its_own_link(tmp_path: Path, fake_lapin) -> None:
+    """Two models both called output.py are two links: a link is found by its file's path."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    assert main(["lapin", "push", str(_write_model(tmp_path / "a")), "--port", "1"]) == 0
+    assert main(["lapin", "push", str(_write_model(tmp_path / "b")), "--port", "1"]) == 0
+    assert [m for m, _ in fake_lapin.calls] == ["project.importIfc", "project.importIfc"]
+
+
+def test_lapin_remove_unlinks_this_model_and_no_other(tmp_path: Path, fake_lapin) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a, b = _write_model(tmp_path / "a"), _write_model(tmp_path / "b")
+    main(["lapin", "push", str(a), "--port", "1"])
+    main(["lapin", "push", str(b), "--port", "1"])
+    assert main(["lapin", "remove", str(a), "--port", "1"]) == 0
+    assert [Path(x["path"]).parent.name for x in fake_lapin.links] == ["b"]
 
 
 def test_lapin_without_the_tools_folder_says_where_to_get_it(
@@ -199,7 +261,7 @@ def test_lapin_without_the_tools_folder_says_where_to_get_it(
     import lite_step.__main__ as cli
 
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "lite_step" / "__main__.py"))
-    assert main(["lapin", "ops", "model.py"]) == 2
+    assert main(["lapin", "push", "model.py"]) == 2
     assert "needs the tools folder of a Lite-STEP checkout" in capsys.readouterr().err
 
 
@@ -212,8 +274,3 @@ def test_lapin_push_without_lapinbim_says_how_to_get_it(
     err = capsys.readouterr().err
     assert "needs its `lapinbim` package" in err and "pip install lapinbim" in err
     assert "Traceback" not in err
-
-
-def test_lapin_ops_needs_no_lapinbim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "lapinbim", None)
-    assert main(["lapin", "ops", str(_write_model(tmp_path))]) == 0

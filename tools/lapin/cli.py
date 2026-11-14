@@ -1,42 +1,45 @@
-"""``lite-step lapin …``: Lite-STEP models in a running Lapin.
+"""``lite-step lapin …``: a Lite-STEP model in a running Lapin.
 
 Lapin (https://github.com/Ciuntuc-BIM-Studio/lapin, MIT) is a desktop BIM
 modeller. This tool sits beside the Blender and VS Code tools: it talks to
 another program on this computer, which the compiler itself never does.
 
-    lite-step lapin status [model.py]       # the Lapins open, and what this model owns there
-    lite-step lapin push model.py           # compile, then make Lapin match (one undo step)
-    lite-step lapin push model.py --watch   # again at every save
-    lite-step lapin diff model.py           # what a push would do; changes nothing
-    lite-step lapin list model.py           # this model's elements in Lapin, and their state
-    lite-step lapin fetch -o context.ifc    # the open Lapin project as IFC, to build against
-    lite-step lapin remove model.py         # delete what this model owns in Lapin, nothing else
-    lite-step lapin ops model.py            # what each element becomes; no Lapin needed
+    lite-step lapin status                 # the Lapins open, and the Lite-STEP models linked in them
+    lite-step lapin push model.py          # compile, then link the IFC into Lapin, or reload the link
+    lite-step lapin push model.py --watch  # again at every save
+    lite-step lapin fetch -o context.ifc   # the open Lapin project as IFC, to build against
+    lite-step lapin remove model.py        # unlink the model from Lapin
+
+A push hands the compiled IFC to Lapin's own importer as a **link**: Lapin
+reads it fast, keeps shared shapes shared, recognises walls, slabs and doors,
+and every element is there to select, read-only (the script owns it). The
+next push reloads the link. Lite-STEP's GlobalIds are derived from the model,
+so a reloaded element is the same element to Lapin: what the user dimensioned
+or tagged in Lapin stays attached.
 
 Talking to Lapin needs its ``lapinbim`` package (MIT, standard library only).
-The mapping is ``lite_step/lapin/ops.py``; the delta is ``lapin_sync.py`` here.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import collections
+import contextlib
+import os
 import runpy
 import sys
-import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import lapin_sync  # noqa: E402
-
 LAPINBIM_HINT = (
-    "error: talking to Lapin needs its `lapinbim` package.\n"
+    "talking to Lapin needs its `lapinbim` package.\n"
     "  pip install lapinbim\n"
     "or, until it is on PyPI, from a Lapin checkout:\n"
     "  pip install <lapin checkout>/python"
 )
+
+#: How long Lapin may take to read a large file (a 10 MB IFC takes about 20 s).
+IMPORT_TIMEOUT = 900
 
 
 class Failed(Exception):
@@ -46,57 +49,44 @@ class Failed(Exception):
 # --------------------------------------------------------------------------- the model
 
 
-def load_ops(source: Path, known: dict | None = None):
-    """The operations for a model file (compiled first) or for an IFC already compiled.
+def ifc_of(source: Path) -> Path:
+    """The IFC a push links: ``source`` itself, or the model compiled beside it (``<name>.ifc``)."""
+    return source if source.suffix.lower() == ".ifc" else source.with_suffix(".ifc")
 
-    ``known``: the bodies Lapin already holds, which are then not meshed again.
-    """
-    from lite_step.lapin import ops_from_ifc
 
+def compile_model(source: Path, quiet: bool) -> Path:
+    """The model file compiled to ``<name>.ifc`` beside it, as ``lite-step model.py -o <name>.ifc`` does."""
+    target = ifc_of(source)
     if source.suffix.lower() == ".ifc":
-        return ops_from_ifc(source, known)
+        return target
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
 
-    # Not "__main__": the model's own compile_main() tail must not write beside the source.
-    namespace = runpy.run_path(str(source), run_name="__lite_step__")
+    started = time.time()
+    # Not "__main__": the model's own compile_main() tail must not write a second file.
+    with _quiet(quiet):
+        namespace = runpy.run_path(str(source), run_name="__lite_step__")
     result = namespace.get("result")
     if result is None:
         raise Failed(f"{source} did not define module-scope `result`.")
-    with tempfile.TemporaryDirectory(prefix="lite-step-lapin-") as tmp:
-        ifc = Path(tmp) / "model.ifc"
-        try:
-            compile_main(result=result, source_path=str(source), output_name=str(ifc))
-        except LiteStepCompileError:
-            raise Failed(f"{source} did not compile (the errors are above).") from None
-        return ops_from_ifc(ifc, known)
+    try:
+        with _quiet(quiet):
+            compile_main(result=result, source_path=str(source), output_name=target.name)
+    except LiteStepCompileError:
+        raise Failed(f"{source.name} did not compile (run `lite-step {source.name}` to see why).") from None
+    print(f"compiled {source.name} -> {target.name} in {time.time() - started:.0f} s")
+    return target
 
 
-def model_id(args) -> str:
-    """What marks this model's elements in Lapin: ``--id``, else the file's name without its ending."""
-    return args.id or Path(args.source).stem
-
-
-def print_summary(ops, out=sys.stdout, notes: bool = False) -> None:
-    s = ops.summary()
-    plain = s["primitive"] - s["primitive_carved"]
-    print(f"{s['elements']} elements for Lapin:", file=out)
-    print(f"  {plain:6}  editable boxes and cylinders", file=out)
-    print(f"  {s['primitive_carved']:6}  editable, cut by other elements (live in Lapin)", file=out)
-    print(f"  {s['body']:6}  bodies (shape set by the script only)", file=out)
-    for name, elevation in ops.storeys:
-        print(f"  storey {name or '(unnamed)'} at {elevation:g} m", file=out)
-    for path, reason in ops.skipped:
-        print(f"  LEFT OUT {path}: {reason}", file=out)
-    if notes:
-        for note in ops.notes:
-            print(f"  note: {note}", file=out)
-    elif ops.notes:
-        reasons = collections.Counter(n.split(" because ")[-1] if " because " in n else n.split(": ", 1)[-1]
-                                      for n in ops.notes)
-        for reason, count in reasons.most_common(5):
-            print(f"  {count:6}  {reason}", file=out)
-        print("  (--notes lists every one)", file=out)
+@contextlib.contextmanager
+def _quiet(quiet: bool):
+    """The compiler's reports (tree, carves) kept off the screen unless asked for."""
+    if not quiet:
+        yield
+        return
+    with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink), \
+            contextlib.redirect_stderr(sink):
+        yield
 
 
 # --------------------------------------------------------------------------- Lapin
@@ -106,7 +96,7 @@ def lapinbim():
     try:
         import lapinbim as module
     except ImportError:
-        raise Failed(LAPINBIM_HINT[len("error: "):]) from None
+        raise Failed(LAPINBIM_HINT) from None
     return module
 
 
@@ -119,43 +109,47 @@ def connect(args):
         raise Failed(str(e)) from None
 
 
-def print_plan(the_plan, out=sys.stdout, verbose: bool = False) -> None:
-    c = the_plan.counts()
-    print(f"create {c['create']}, change {c['update']}, make again {c['replace']}, "
-          f"delete {c['delete']}, untouched {c['keep']}", file=out)
-    for path in the_plan.hand_edited:
-        print(f"  changed in Lapin, the script's version is put back: {path}", file=out)
-    if verbose:
-        for label, paths in (("create", [o.path for o in the_plan.create]),
-                             ("change", [o.path for o, _ in the_plan.update]),
-                             ("make again", [o.path for o, _ in the_plan.replace]),
-                             ("delete", [h.path for h in the_plan.delete])):
-            for path in paths:
-                print(f"  {label}: {path}", file=out)
+def _same_file(a: str, b: Path) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(str(b)))
+
+
+def find_link(client, ifc: Path):
+    """Lapin's link to this file, or ``None``. A link remembers the path it was made from."""
+    for link in client.query("link.list") or []:
+        path = link.get("path") if isinstance(link, dict) else getattr(link, "path", None)
+        if path and _same_file(path, ifc):
+            return link
+    return None
+
+
+def _field(obj, name, default=None):
+    return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
 
 
 def push_once(args, client) -> int:
-    owned = lapin_sync.read_owned(client, model_id(args))
-    ops = load_ops(Path(args.source).resolve(), lapin_sync.known_bodies(owned))
-    the_plan = lapin_sync.plan(ops, owned)
-    for path, reason in ops.skipped:
-        print(f"LEFT OUT {path}: {reason}", file=sys.stderr)
-    print_plan(the_plan, verbose=args.verbose or args.dry_run)
-    if args.dry_run:
-        print("(dry run: nothing was changed)")
-        return 0
+    source = Path(args.source).resolve()
+    ifc = compile_model(source, quiet=not args.verbose)
+    link = find_link(client, ifc)
     started = time.time()
-    lapin_sync.apply(client, ops, the_plan, model_id(args), lapinbim().global_id)
-    if the_plan.empty:
-        print("Lapin already matches the model.")
-    else:
-        print(f"done in {time.time() - started:.1f} s; Ctrl+Z in Lapin undoes this push.")
-    return 1 if ops.skipped else 0
+    try:
+        if link is None:
+            answer = client.call("project.importIfc", {"path": str(ifc), "mode": "link"}, timeout=IMPORT_TIMEOUT)
+            link_id = _field(answer, "linkId")
+            verb = "linked"
+        else:
+            link_id = _field(link, "id")
+            client.call("project.reloadLink", {"id": link_id}, timeout=IMPORT_TIMEOUT)
+            verb = "reloaded"
+    except lapinbim().LapinError as e:
+        raise Failed(f"Lapin refused the file: {e}") from None
+    now = find_link(client, ifc) or {}
+    print(f"{verb} {ifc.name} in Lapin in {time.time() - started:.0f} s: "
+          f"{_field(now, 'elements', '?')} elements on {_field(now, 'storeys', '?')} storeys (link {link_id})")
+    return 0
 
 
 def cmd_push(args) -> int:
-    client = connect(args)
-    with client:
+    with connect(args) as client:
         code = push_once(args, client)
         if not args.watch:
             return code
@@ -179,30 +173,6 @@ def cmd_push(args) -> int:
             return 0
 
 
-def cmd_diff(args) -> int:
-    args.dry_run, args.verbose, args.watch = True, True, False
-    with connect(args) as client:
-        return push_once(args, client)
-
-
-def cmd_list(args) -> int:
-    with connect(args) as client:
-        owned = lapin_sync.read_owned(client, model_id(args))
-        ops = load_ops(Path(args.source).resolve(), lapin_sync.known_bodies(owned))
-    the_plan = lapin_sync.plan(ops, owned)
-    state = {o.path: "not in Lapin yet" for o in the_plan.create}
-    state.update({o.path: "changed in the script" for o, _ in [*the_plan.update, *the_plan.replace]})
-    state.update({o.path: "in sync" for o, _ in the_plan.keep})
-    state.update({h.path: "gone from the script" for h in the_plan.delete})
-    state.update({p: "changed in Lapin" for p in the_plan.hand_edited})
-    kinds = {o.path: (o.kind, o.ifc_class, o.storey or "") for o in ops.ops}
-    for path in sorted(state):
-        kind, cls, storey = kinds.get(path, ("", "", ""))
-        print(f"{state[path]:22} {kind:9} {cls:28} {storey:16} {path}")
-    print(f"{len(owned)} elements of `{model_id(args)}` in Lapin; {len(ops.ops)} in the model.")
-    return 0
-
-
 def cmd_status(args) -> int:
     module = lapinbim()
     # A port named is looked at directly: an engine started with a port of its own is not found by looking.
@@ -220,76 +190,57 @@ def cmd_status(args) -> int:
         if args.port:
             e = client.call("engine.hello", {})
             print(f"Lapin on port {args.port}: {e['productName']} {e['version']}, project {e['project'] or '(not saved yet)'}")
-        for s in sorted((e for e in client.model if e.type == "IfcBuildingStorey"),
-                        key=lambda s: float(s.attrs.get("elevation") or 0)):
-            print(f"  storey {s.name} at {float(s.attrs.get('elevation') or 0):g} m")
-        all_marks = lapin_sync.marks(client)
-        if not all_marks:
-            print("  no Lite-STEP elements in this project")
-        for name, owned in sorted(all_marks.items()):
-            print(f"  model `{name}`: {len(owned)} elements")
+        links = [x for x in client.query("link.list") or [] if _field(x, "kind") == "ifc"]
+        if not links:
+            print("  no IFC links in this project")
+        for x in links:
+            print(f"  link {_field(x, 'name')}: {_field(x, 'elements')} elements, {_field(x, 'storeys')} storeys, "
+                  f"from {_field(x, 'path') or '(the browser: no path, cannot reload)'}")
     return 0
 
 
 def cmd_fetch(args) -> int:
     with connect(args) as client:
-        answer = client.call("project.exportIfc", {})
-    data = base64.b64decode(answer["data"])
+        answer = client.call("project.exportIfc", {}, timeout=IMPORT_TIMEOUT)
+    data = base64.b64decode(_field(answer, "data"))
     Path(args.output).write_bytes(data)
-    print(f"wrote {args.output} ({len(data)} bytes): the Lapin project as IFC. "
-          f"It is context to build against; nothing reads it back into Lapin.")
+    print(f"wrote {args.output} ({len(data)} bytes): the Lapin project as IFC, to build against. "
+          f"Nothing reads it back into Lapin.")
     return 0
 
 
 def cmd_remove(args) -> int:
+    ifc = ifc_of(Path(args.source).resolve())
     with connect(args) as client:
-        count = lapin_sync.remove(client, model_id(args))
-    print(f"deleted {count} elements of `{model_id(args)}` from Lapin; Ctrl+Z there brings them back."
-          if count else f"`{model_id(args)}` has no elements in Lapin.")
+        link = find_link(client, ifc)
+        if link is None:
+            print(f"{ifc.name} is not linked in this Lapin.")
+            return 0
+        client.execute("link.unlink", {"id": _field(link, "id")})
+    print(f"unlinked {ifc.name} ({_field(link, 'elements')} elements); Ctrl+Z in Lapin brings it back.")
     return 0
 
 
-def cmd_ops(args) -> int:
-    ops = load_ops(Path(args.source).resolve())
-    if args.output:
-        Path(args.output).write_text(ops.to_json(), encoding="utf-8")
-        print_summary(ops, out=sys.stderr, notes=args.notes)
-        print(f"wrote {args.output}", file=sys.stderr)
-    else:
-        print_summary(ops, notes=args.notes)
-    return 1 if ops.skipped else 0
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="lite-step lapin", description="Lite-STEP models in a running Lapin.")
+    parser = argparse.ArgumentParser(prog="lite-step lapin", description="A Lite-STEP model in a running Lapin.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def command(name, run, help, source=None, lapin=True):
+    def command(name, run, help, source=False):
         p = sub.add_parser(name, help=help)
         if source:
-            p.add_argument("source", nargs=None if source == "required" else "?",
-                           help="a model file (.py, compiled first) or a compiled .ifc")
-            p.add_argument("--id", help="the name this model's elements are marked with in Lapin "
-                                        "(default: the file's name without its ending)")
-        if lapin:
-            p.add_argument("--port", type=int, help="the Lapin on this port")
-            p.add_argument("--project", help="the Lapin with this project open (its file name or a part of its path)")
+            p.add_argument("source", help="a model file (.py, compiled first) or a compiled .ifc")
+        p.add_argument("--port", type=int, help="the Lapin on this port")
+        p.add_argument("--project", help="the Lapin with this project open (its file name or a part of its path)")
         p.set_defaults(run=run)
         return p
 
-    push = command("push", cmd_push, "compile, then make Lapin match the model (one undo step)", "required")
+    push = command("push", cmd_push, "compile, then link the IFC into Lapin or reload the link", source=True)
     push.add_argument("--watch", action="store_true", help="push again whenever the file is saved")
-    push.add_argument("--dry-run", action="store_true", help="say what would change, change nothing")
-    push.add_argument("-v", "--verbose", action="store_true", help="name every element touched")
-    command("diff", cmd_diff, "what a push would do; changes nothing", "required")
-    command("list", cmd_list, "this model's elements in Lapin and their state", "required")
-    command("status", cmd_status, "the Lapins open on this computer and what they hold")
+    push.add_argument("-v", "--verbose", action="store_true", help="show the compiler's reports")
+    command("status", cmd_status, "the Lapins open on this computer and the models linked in them")
     fetch = command("fetch", cmd_fetch, "the open Lapin project as IFC, to build against")
     fetch.add_argument("-o", "--output", required=True, help="the IFC file to write")
-    command("remove", cmd_remove, "delete what this model owns in Lapin; nothing else", "required")
-    ops = command("ops", cmd_ops, "what each element becomes in Lapin; no Lapin needed", "required", lapin=False)
-    ops.add_argument("-o", "--output", help="write the operations as JSON here")
-    ops.add_argument("--notes", action="store_true", help="list every note, not the five commonest")
+    command("remove", cmd_remove, "unlink the model from Lapin", source=True)
 
     args = parser.parse_args(argv)
     if getattr(args, "source", None) and not Path(args.source).is_file():

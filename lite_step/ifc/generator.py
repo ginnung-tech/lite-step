@@ -1710,6 +1710,13 @@ def generate_ifc(
         # so the names it mints never enter LITESTEP_META.
         _name_anonymous_proxies(model)
 
+        # GlobalIds from what each entity is, the same every compile of the same
+        # model (lite-step#9): Lapin links reload by them, BCF topics point at them.
+        # Last, after every emitter; the manifest above is brought along.
+        from lite_step.ifc.embedder import LITESTEP_META_PSET_NAME
+        from lite_step.ifc.stable_ids import remap_manifest, stabilise_global_ids
+        remap_manifest(model, stabilise_global_ids(model), LITESTEP_META_PSET_NAME)
+
         # Serialize to string
         ifc_content = _model_to_string(model)
 
