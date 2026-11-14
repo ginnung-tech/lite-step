@@ -8,7 +8,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.models import Door, Element, Material, Mesh, Point, Point2D, Product, Project, Site, Sweep, Wall, Window, miter
 from lite_step.optimization import jit_compile, solve_sequence
 
@@ -16,20 +16,20 @@ I = lambda x: int(round(x))  # noqa: E731
 
 RANDOM_SEED = int(time.time())
 
-CABIN_LENGTH = 6000.0
-CABIN_WIDTH = 4000.0
-CORNER_OVERHANG = 250.0
+CABIN_LENGTH = param(6000.0, "mm", "Cabin length")
+CABIN_WIDTH = param(4000.0, "mm", "Cabin width")
+CORNER_OVERHANG = param(250.0, "mm", "Log overhang at the corners")
 
 LOG_LEN_LONG = CABIN_LENGTH + 2.0 * CORNER_OVERHANG
 LOG_LEN_SHORT = CABIN_WIDTH + 2.0 * CORNER_OVERHANG
 
-NUM_LOGS_PER_WALL = 7
+NUM_LOGS_PER_WALL = param(7, "", "Logs per wall")
 NUM_X_STATIONS = 61
 NUM_THETA_SEGS = 36
 
 LOG_R_BUTT_MIN, LOG_R_BUTT_MAX = 170.0, 195.0
 LOG_R_TIP_MIN, LOG_R_TIP_MAX = 155.0, 175.0
-AVG_LOG_DIAMETER = 350.0
+AVG_LOG_DIAMETER = param(350.0, "mm", "Average log diameter")
 WALL_Z_RAISE = AVG_LOG_DIAMETER / 2.0
 
 SLAB_EXTEND = 150.0

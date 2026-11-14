@@ -64,7 +64,7 @@ if str(_repo_root) not in sys.path:
 
 import math
 
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.materials import MaterialDef, dk
 from lite_step.materials.dk import Render, SheetGeometry
 from lite_step.models import (
@@ -118,16 +118,16 @@ if ALUMINIUM not in dk.MATERIALS:
     )
 
 # ── Finger & Grid Geometry ─────────────────────────────────────────────────
-WING_COUNT = 5
-ARM_WIDTH = 24000
-ARM_REACH = 60000
+WING_COUNT = param(5, "", "Wings")
+ARM_WIDTH = param(24000, "mm", "Wing width")
+ARM_REACH = param(60000, "mm", "Wing length")
 ARM_HALF = ARM_WIDTH // 2
 CAP_X = ARM_REACH - ARM_HALF  # 48000
 PITCH = 36000 // WING_COUNT  # 7200 centidegrees = 72.0 deg
-STOREY_HEIGHT = 4200
+STOREY_HEIGHT = param(4200, "mm", "Storey height")
 SLAB_T = 275
 WING_STOREYS = [6, 5, 4, 5, 4]
-ATRIUM_RADIUS = 9000
+ATRIUM_RADIUS = param(9000, "mm", "Atrium radius")
 #: A SECOND atrium on every fingertip, on the tip's own rounding circle — the one
 #: part of this plan that is genuinely circular.
 TIP_ATRIUM_RADIUS = 6000

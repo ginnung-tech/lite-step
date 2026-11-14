@@ -33,7 +33,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from lite_step import compile_main  # noqa: E402
+from lite_step import compile_main, param  # noqa: E402
 from lite_step.models import (  # noqa: E402
     Element,
     Mesh,
@@ -45,13 +45,13 @@ from lite_step.models import (  # noqa: E402
 I = lambda x: int(round(x))  # noqa: E731,E741
 
 # ── Machine parameters (W7-X / LHD scale, mm) ────────────────────────────
-R0 = 5_500          # major radius
+R0 = param(5_500, "mm", "Major radius")          # major radius
 A_COIL = 1_600      # helical winding minor radius
-N_P = 5             # field periods / helical turns
+N_P = param(5, "", "Field periods")             # field periods / helical turns
 L = 2               # l pairs -> 2l conductors
 
-PLASMA_A = 400      # core plasma ellipse semi-minor axis (mm)
-PLASMA_B = 900      # core plasma ellipse semi-major axis (mm, kappa = 2.25)
+PLASMA_A = param(400, "mm", "Plasma semi-axis a")      # core plasma ellipse semi-minor axis (mm)
+PLASMA_B = param(900, "mm", "Plasma semi-axis b")      # core plasma ellipse semi-major axis (mm, kappa = 2.25)
 CONDUCTOR_R = 170   # coil conductor tube radius
 CONDUCTOR_SIDES = 12
 

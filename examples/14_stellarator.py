@@ -29,7 +29,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-from lite_step import compile_main  # noqa: E402
+from lite_step import compile_main, param  # noqa: E402
 from lite_step.models import (  # noqa: E402
     Element,
     Mesh,
@@ -42,13 +42,13 @@ I = lambda x: int(round(x))  # noqa: E731,E741
 
 # ── Global Stellarator Parameters (W7-X Scale) ───────────────────────────
 
-R0 = 5_500           # Major radius of the torus (mm)
-N_P = 5              # Number of toroidal field periods (5-fold symmetry)
-TOTAL_COILS = 50     # Total modular coils in full 360-degree torus (10 per period)
+R0 = param(5_500, "mm", "Major radius")           # Major radius of the torus (mm)
+N_P = param(5, "", "Field periods")              # Number of toroidal field periods (5-fold symmetry)
+TOTAL_COILS = param(50, "", "Modular coils")     # Total modular coils in full 360-degree torus (10 per period)
 
 # Plasma core geometry
-PLASMA_A = 480       # Minor semi-axis 1 (mm)
-PLASMA_B = 820       # Minor semi-axis 2 (mm)
+PLASMA_A = param(480, "mm", "Plasma semi-axis a")       # Minor semi-axis 1 (mm)
+PLASMA_B = param(820, "mm", "Plasma semi-axis b")       # Minor semi-axis 2 (mm)
 PLASMA_BEAN = 160    # Higher-order bean/triangular shaping parameter (mm)
 AXIS_R_RIPPLE = 180  # Non-planar magnetic axis radial ripple (mm)
 AXIS_Z_RIPPLE = 180  # Non-planar magnetic axis vertical ripple (mm)

@@ -113,6 +113,25 @@ warns loudly and names the fix. `.add(child, carve="none")` opts out.
 `Window(name="left")` inside `Wall(name="north")` becomes
 `window:left:wall:north`. You match it by suffix, never write it.
 
+**Parameters are the values a person will want to change.** Write them as
+`ROOF_PITCH_DEG = param(45, "deg", "Roof pitch")` (`from lite_step import
+param`): the script still sees `45`, and tools can list and edit it. Lapin
+shows them as project parameters and writes an edit back into that one line
+(see [`tools/`](tools/)). A handful of real design choices per model, not every
+coordinate; the examples show how many.
+
+**GlobalIds are stable.** Each element's GlobalId is derived from its canonical
+name and the project's name, so compiling the same model again gives the same
+ids, and tools that keep hold of an element (a Lapin link, a BCF topic) keep
+it. Renaming or moving an element changes its path, and so its id.
+
+**A unit you repeat is a `Product`.** Its occurrences share one body in the
+IFC (`IfcRepresentationMap`), and the compiler decides which occurrences can
+share before it writes them: a 52-storey tower's 1,591 facade modules are 9
+bodies. Occurrences placed with `placement=` or hosted as openings are grouped
+cheaply; one baked in by `.anchor()`, or carved differently from its
+siblings, is compared in full.
+
 The complete authoring API — every model class, every field, every coordinate
 convention — is [`agents/dsl-reference.md`](agents/dsl-reference.md).
 
@@ -154,6 +173,7 @@ is a loud refusal rather than unguarded execution.
 See [`tools/`](tools/) for editor and CAD tooling:
 - **VS Code Extension**: Compiler triggers, in-editor 3D Webview preview, and live push sync.
 - **Blender Add-on**: WebSocket bridge syncing IFC models into Blender 5.0+ with Bonsai and presentation PBR rendering.
+- **Lapin**: `lite-step lapin push model.py` links the compiled model into [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller, and reloads it on the next push; parameters edited in Lapin come back into the script.
 
 ## Agents
 

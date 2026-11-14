@@ -75,7 +75,7 @@ if str(_repo_root) not in sys.path:
 
 import math
 
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.materials import MaterialDef, dk
 from lite_step.materials.dk import MemberGeometry, Render, SheetGeometry
 from lite_step.models import (
@@ -251,7 +251,7 @@ def ground_at(u, v=0):
 
 
 # ── Geometry Parameters ────────────────────────────────────────────────────
-DECK_WIDTH = 7000
+DECK_WIDTH = param(7000, "mm", "Deck width")
 DECK_HALF = DECK_WIDTH // 2
 RIB_HALF = 3100
 DECK_DEPTH = 2600
@@ -260,16 +260,16 @@ UC = LH / 2
 #: Clear air between the deck soffit and the top of the arch at midspan. Named,
 #: because it is the number that makes the arch a DECK arch: shrink it to zero and
 #: the crown grows up into the deck truss, which compiles perfectly and is wrong.
-DECK_ARCH_CLEARANCE = 4000
+DECK_ARCH_CLEARANCE = param(4000, "mm", "Clearance under the arch")
 Z_CROWN = z_deck(UC) - DECK_DEPTH - DECK_ARCH_CLEARANCE
 ARCH_DEPTH = 6000
-N_PANEL = 12
+N_PANEL = param(12, "", "Arch panels")
 
 #: Rise / span of the arch. The High Steel Bridge is close to 1:3.7, which is the
 #: usual band for a riveted steel truss deck arch: flatter and the thrust at the
 #: skewback grows past what a rock face takes, steeper and the deck-level posts
 #: near the springing get long enough to need their own bracing system.
-ARCH_RISE_RATIO = 0.27
+ARCH_RISE_RATIO = param(0.27, "", "Arch rise / span")
 
 #: A spandrel post shorter than this is not built — near the crown the deck soffit
 #: and the arch have nearly met, and a 40 mm "post" is a modelling artefact.

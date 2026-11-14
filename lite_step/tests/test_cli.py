@@ -341,3 +341,14 @@ def test_lapin_push_reports_a_parameter_lapin_refuses_and_carries_on(
     assert main(["lapin", "push", str(model), "--port", "1"]) == 0
     assert "parameter NAME: Lapin refused it" in capsys.readouterr().err
     assert list(fake_lapin.params) == ["HEIGHT"]
+
+
+def test_lapin_ctrl_c_stops_without_a_traceback(
+    tmp_path: Path, fake_lapin, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    def interrupted(*a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(fake_lapin, "call", interrupted)
+    assert main(["lapin", "push", str(_write_model(tmp_path)), "--port", "1"]) == 130
+    err = capsys.readouterr().err
+    assert "stopped." in err and "Traceback" not in err
