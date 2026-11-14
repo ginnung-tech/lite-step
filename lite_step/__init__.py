@@ -18,6 +18,7 @@ from . import compiler
 from . import ifc
 from . import optimization
 from lite_step.compiler.executor import compile_main, LiteStepCompileError
+from lite_step.params import param
 from lite_step.strict import (
     enable_strict_int_mm,
     disable_strict_int_mm,
@@ -34,6 +35,7 @@ __all__ = [
     "optimization",
     "compile_main",
     "LiteStepCompileError",
+    "param",
     "enable_strict_int_mm",
     "disable_strict_int_mm",
     "strict_int_mm_enabled",

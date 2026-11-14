@@ -7,8 +7,17 @@ another program on this computer, which the compiler itself never does.
     lite-step lapin status                 # the Lapins open, and the Lite-STEP models linked in them
     lite-step lapin push model.py          # compile, then link the IFC into Lapin, or reload the link
     lite-step lapin push model.py --watch  # again at every save
+    lite-step lapin pull model.py          # write the parameters changed in Lapin into the script
     lite-step lapin fetch -o context.ifc   # the open Lapin project as IFC, to build against
     lite-step lapin remove model.py        # unlink the model from Lapin
+
+**Parameters.** Every ``NAME = param(value, unit, label)`` in the script is
+published to Lapin as a project parameter (Manage -> Project information), in
+the group ``Lite-STEP <model>``. Changed there, it comes back: ``pull`` writes
+it into the script, and ``push --watch`` does so by itself, then compiles and
+reloads. Only the value in that one line changes. A parameter the script
+computes (``param(WIDTH * 2, ...)``) is not published: it can only change in
+the script.
 
 A push hands the compiled IFC to Lapin's own importer as a **link**: Lapin
 reads it fast, keeps shared shapes shared, recognises walls, slabs and doors,
@@ -126,6 +135,114 @@ def _field(obj, name, default=None):
     return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
 
 
+# --------------------------------------------------------------------------- parameters
+
+
+def model_id(args) -> str:
+    """What this model's parameters are grouped under in Lapin: the script's name without its ending."""
+    return Path(args.source).stem
+
+
+def _group(model: str) -> str:
+    return f"Lite-STEP {model}"
+
+
+def _lapin_params(client) -> dict:
+    """Lapin's project parameters, ``{key: {key, label, type, group, value}}``."""
+    info = client.query("project.info") or {}
+    return {_field(c, "key"): c for c in (_field(info, "custom") or [])}
+
+
+def _script_params(source: Path):
+    from lite_step.params import read_params
+
+    if source.suffix.lower() != ".py":
+        return []
+    return [p for p in read_params(source.read_text(encoding="utf-8")) if p.editable]
+
+
+def _shown(p) -> dict:
+    """A parameter as Lapin keeps it: its label carries the unit, its value is text."""
+    label = p.label or p.name.replace("_", " ").capitalize()
+    is_number = isinstance(p.value, (int, float)) and not isinstance(p.value, bool)
+    return {"label": f"{label} ({p.unit})" if p.unit else label,
+            "type": "number" if is_number else "text", "value": str(p.value)}
+
+
+def _same_value(script_value, lapin_value) -> bool:
+    from lite_step.params import coerce
+
+    try:
+        return coerce(script_value, lapin_value) == script_value
+    except (TypeError, ValueError):
+        return False
+
+
+def publish_params(client, source: Path, model: str) -> None:
+    """The script's parameters into Lapin's project parameters; those it no longer has removed.
+
+    The script wins: a value changed in Lapin and not pulled is overwritten, and said so.
+    """
+    group, there = _group(model), _lapin_params(client)
+    wanted = _script_params(source)
+    for p in wanted:
+        have = there.get(p.name)
+        if have is not None and _field(have, "group") != group:
+            print(f"parameter {p.name}: Lapin already has one in group {_field(have, 'group')!r}; not published",
+                  file=sys.stderr)
+            continue
+        shown = _shown(p)
+        if have is not None:
+            same_value = _same_value(p.value, _field(have, "value"))
+            same_rest = all(str(_field(have, k)) == shown[k] for k in ("label", "type"))
+            if same_value and same_rest:
+                continue
+            if not same_value:
+                print(f"parameter {p.name}: {_field(have, 'value')} in Lapin replaced by the script's {p.value} "
+                      f"(`lite-step lapin pull` keeps a value changed in Lapin)")
+        try:
+            client.execute("project.setParameter", {"key": p.name, "group": group, **shown})
+        except lapinbim().LapinError as e:
+            # Lapin keeps some keys for its own project fields (a constant called NAME, say).
+            print(f"parameter {p.name}: Lapin refused it ({e}); rename the constant to publish it",
+                  file=sys.stderr)
+    names = {p.name for p in wanted}
+    for key, have in there.items():
+        if _field(have, "group") == group and key not in names:
+            client.execute("project.removeParameter", {"key": key})
+
+
+def pull_params(client, source: Path, model: str) -> list:
+    """The values changed in Lapin written into the script: ``[(name, old, new)]``, in file order.
+
+    Writes the file only when something changed; each change is one literal.
+    """
+    from lite_step.params import read_params, write_param
+
+    if source.suffix.lower() != ".py":
+        return []
+    group, there = _group(model), _lapin_params(client)
+    text = source.read_text(encoding="utf-8")
+    changes = []
+    for p in read_params(text):
+        have = there.get(p.name)
+        if have is None or _field(have, "group") != group or not p.editable:
+            continue
+        value = _field(have, "value")
+        if _same_value(p.value, value):
+            continue
+        try:
+            text = write_param(text, p.name, value)
+        except ValueError as e:
+            print(f"parameter {p.name}: {value!r} from Lapin not written: {e}", file=sys.stderr)
+            continue
+        changes.append((p.name, p.value, value))
+    if changes:
+        with open(source, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+    return changes
+
+
 def push_once(args, client) -> int:
     source = Path(args.source).resolve()
     ifc = compile_model(source, quiet=not args.verbose)
@@ -145,6 +262,7 @@ def push_once(args, client) -> int:
     now = find_link(client, ifc) or {}
     print(f"{verb} {ifc.name} in Lapin in {time.time() - started:.0f} s: "
           f"{_field(now, 'elements', '?')} elements on {_field(now, 'storeys', '?')} storeys (link {link_id})")
+    publish_params(client, source, model_id(args))
     return 0
 
 
@@ -155,12 +273,19 @@ def cmd_push(args) -> int:
             return code
         source = Path(args.source).resolve()
         seen = source.stat().st_mtime
-        print(f"watching {source.name}; Ctrl+C stops.")
+        print(f"watching {source.name} and its parameters in Lapin; Ctrl+C stops.")
         try:
             while True:
                 time.sleep(0.5)
                 now = source.stat().st_mtime
                 if now == seen:
+                    # The script is as pushed: a parameter changed in Lapin is written into it,
+                    # which changes the file, which the next turn compiles and reloads.
+                    try:
+                        for name, old, new in pull_params(client, source, model_id(args)):
+                            print(f"{name}: {old} -> {new} from Lapin, written to {source.name}")
+                    except Exception as e:  # noqa: BLE001 - a failed look must not end the watch
+                        print(f"error reading Lapin's parameters: {type(e).__name__}: {e}", file=sys.stderr)
                     continue
                 seen = now
                 try:
@@ -171,6 +296,17 @@ def cmd_push(args) -> int:
                     print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
         except KeyboardInterrupt:
             return 0
+
+
+def cmd_pull(args) -> int:
+    source = Path(args.source).resolve()
+    with connect(args) as client:
+        changes = pull_params(client, source, model_id(args))
+    for name, old, new in changes:
+        print(f"{name}: {old} -> {new}")
+    print(f"wrote {len(changes)} parameter(s) from Lapin into {source.name}" if changes
+          else f"{source.name} already has Lapin's parameter values")
+    return 0
 
 
 def cmd_status(args) -> int:
@@ -237,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
     push = command("push", cmd_push, "compile, then link the IFC into Lapin or reload the link", source=True)
     push.add_argument("--watch", action="store_true", help="push again whenever the file is saved")
     push.add_argument("-v", "--verbose", action="store_true", help="show the compiler's reports")
+    command("pull", cmd_pull, "write the parameters changed in Lapin into the script", source=True)
     command("status", cmd_status, "the Lapins open on this computer and the models linked in them")
     fetch = command("fetch", cmd_fetch, "the open Lapin project as IFC, to build against")
     fetch.add_argument("-o", "--output", required=True, help="the IFC file to write")

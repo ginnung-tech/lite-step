@@ -180,6 +180,7 @@ class _FakeLapin:
 
     links: list = []
     calls: list = []
+    params: dict = {}
 
     def __init__(self, port=None, project=None):
         pass
@@ -204,20 +205,29 @@ class _FakeLapin:
         raise AssertionError(method)
 
     def query(self, name, args=None):
+        if name == "project.info":
+            return {"custom": [dict(v) for v in _FakeLapin.params.values()]}
         assert name == "link.list"
         return [dict(x) for x in _FakeLapin.links]
 
     def execute(self, command, args):
         _FakeLapin.calls.append((command, args))
-        assert command == "link.unlink"
-        _FakeLapin.links = [x for x in _FakeLapin.links if x["id"] != args["id"]]
+        if command == "project.setParameter":
+            if args["key"].lower() == "name":
+                raise RuntimeError(f"{args['key']} is a field of the project's information already.")
+            _FakeLapin.params[args["key"]] = dict(args)
+        elif command == "project.removeParameter":
+            del _FakeLapin.params[args["key"]]
+        else:
+            assert command == "link.unlink"
+            _FakeLapin.links = [x for x in _FakeLapin.links if x["id"] != args["id"]]
 
 
 @pytest.fixture
 def fake_lapin(monkeypatch: pytest.MonkeyPatch):
     import types
 
-    _FakeLapin.links, _FakeLapin.calls = [], []
+    _FakeLapin.links, _FakeLapin.calls, _FakeLapin.params = [], [], {}
     module = types.SimpleNamespace(Lapin=_FakeLapin, LapinError=RuntimeError, engines=lambda: [])
     monkeypatch.setitem(sys.modules, "lapinbim", module)
     return _FakeLapin
@@ -274,3 +284,60 @@ def test_lapin_push_without_lapinbim_says_how_to_get_it(
     err = capsys.readouterr().err
     assert "needs its `lapinbim` package" in err and "pip install lapinbim" in err
     assert "Traceback" not in err
+
+
+PARAM_MODEL = textwrap.dedent(
+    """
+    from lite_step import compile_main, param
+    from lite_step.models import Project, Point, Box
+
+    HEIGHT = param(2400, "mm", "Room height")  # the clear height
+    DOUBLE = param(HEIGHT * 2, "mm", "Twice")
+
+    def generate_project() -> Project:
+        proj = Project(name="cli_test")
+        proj.add(Box(id="room", start=Point(x=0, y=0, z=0), end=Point(x=4000, y=3000, z=HEIGHT), type="sketch"))
+        return proj
+
+    result = generate_project()
+
+    if __name__ == "__main__":
+        compile_main()
+    """
+).strip()
+
+
+def test_lapin_push_publishes_the_parameters_and_pull_writes_lapins_value_back(tmp_path: Path, fake_lapin) -> None:
+    model = _write_model(tmp_path, PARAM_MODEL)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert fake_lapin.params == {"HEIGHT": {"key": "HEIGHT", "group": "Lite-STEP output", "label": "Room height (mm)",
+                                            "type": "number", "value": "2400"}}, "a computed parameter is not published"
+
+    fake_lapin.params["HEIGHT"]["value"] = "2700"  # the user edits it in Lapin
+    assert main(["lapin", "pull", str(model), "--port", "1"]) == 0
+    text = model.read_text(encoding="utf-8")
+    assert 'HEIGHT = param(2700, "mm", "Room height")  # the clear height' in text
+    assert text.replace("param(2700,", "param(2400,") == PARAM_MODEL, "only that value changed"
+
+    fake_lapin.calls.clear()
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert not [c for c, _ in fake_lapin.calls if c == "project.setParameter"], "an unchanged parameter is not sent"
+
+
+def test_lapin_push_leaves_other_models_parameters_alone_and_removes_its_own_gone_ones(tmp_path: Path, fake_lapin) -> None:
+    fake_lapin.params["HEIGHT"] = {"key": "HEIGHT", "group": "Lite-STEP carport", "value": "2100"}
+    fake_lapin.params["OLD"] = {"key": "OLD", "group": "Lite-STEP output", "value": "1"}
+    assert main(["lapin", "push", str(_write_model(tmp_path, PARAM_MODEL)), "--port", "1"]) == 0
+    assert fake_lapin.params["HEIGHT"]["group"] == "Lite-STEP carport", "another model's parameter is not taken over"
+    assert "OLD" not in fake_lapin.params
+
+
+def test_lapin_push_reports_a_parameter_lapin_refuses_and_carries_on(
+    tmp_path: Path, fake_lapin, capsys: pytest.CaptureFixture
+) -> None:
+    """Lapin keeps some keys for its own fields; the push must not die after the link is reloaded."""
+    model = _write_model(tmp_path, PARAM_MODEL.replace(
+        'DOUBLE = param(', 'NAME = param("Shed", label="Building name")\nDOUBLE = param('))
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert "parameter NAME: Lapin refused it" in capsys.readouterr().err
+    assert list(fake_lapin.params) == ["HEIGHT"]

@@ -85,6 +85,11 @@ A `Product` is the one OBJECT handle, and it has no path.
 11. **Patch mode** — `base_ifc = "./input.ifc"` at module scope; `generate_project()` still declares the FULL end state.
     Continuity is carried ONLY by the canonical name — a rename or a move reads downstream as delete + create.
     First build: no `base_ifc` line.
+12. **Parameters** — a value a person will want to change is a module constant written `NAME = param(value, unit, label)`:
+    `ROOF_SLAB_THICK = param(250, "mm", "Roof slab thickness")` (`from lite_step import param`). `param()` returns the value
+    unchanged, so the rest of the script uses `ROOF_SLAB_THICK` as the number it is. Tools list these and edit the value in
+    that line; nothing else. Keep the value a plain literal (`param(WIDTH * 2, …)` is shown but cannot be edited), keep
+    lengths in int mm, and keep the declaration at module scope. A handful of real design choices, not every coordinate.
 
 ## 3. API quick reference
 
