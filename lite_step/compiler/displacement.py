@@ -1028,9 +1028,16 @@ def _explicit_carve_pairs(project, inert_authored=None) -> List[Tuple[str, str, 
 def carve_pairs(project) -> List[Tuple[str, str, str]]:
     """Every ``(loser, winner, mechanism)`` this compile realised, or ``[]``.
 
-    ``[]`` before ``apply_displacement`` has run — which is a real answer, not
-    a missing one, because nothing has carved anything yet.
+    Once ``generate_ifc`` has emitted the file, the pairs the FILE holds
+    (``project._carve_emitted``): an inferred pair whose operand built no
+    solid is not a carve, however confidently it was planned. Before that —
+    ``apply_displacement`` alone, or an emission that failed — the planned
+    pairs, which is the best answer there is. ``[]`` before displacement has
+    run, which is a real answer, not a missing one.
     """
+    emitted = getattr(project, "_carve_emitted", None)
+    if emitted is not None:
+        return list(emitted)
     return list(getattr(project, "_carve_pairs", None) or [])
 
 
