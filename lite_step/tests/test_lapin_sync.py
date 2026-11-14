@@ -179,6 +179,21 @@ def test_a_changed_body_gets_a_new_body_on_the_same_element():
     assert lapin.by_name("beam").attrs["body"]["vertices"][1] == [2.0, 0, 0]
 
 
+def test_a_body_lapin_already_holds_needs_no_mesh_to_be_left_alone():
+    """The mapping does not mesh a body whose hash Lapin has: its op carries no mesh."""
+    lapin = FakeLapin()
+    sent = Op("beam", "body", "IfcBeam", "storey:ground", 0.0, _mesh("beam").args, (), "src-1")
+    _push(lapin, sent)
+    assert sync.known_bodies(sync.read_owned(lapin, "house")) == {"beam": sent.hash}
+    lapin.calls.clear()
+    unmeshed = Op("beam", "body", "IfcBeam", "storey:ground", 0.0, None, (), "src-1")
+    assert unmeshed.hash == sent.hash, "a body's hash comes from its IFC description, not its mesh"
+    the_plan, _ = _push(lapin, unmeshed)
+    assert the_plan.empty and lapin.calls == []
+    with pytest.raises(RuntimeError, match="beam must be sent to Lapin but was not meshed"):
+        _push(lapin, Op("beam", "body", "IfcBeam", "storey:ground", 0.0, None, (), "src-2"))
+
+
 def test_what_cannot_change_in_place_is_made_again():
     """A box that became a mesh, another class, another storey: a new element."""
     for changed in (_mesh("thing"), _box("thing", cls="IfcColumn"), _box("thing", storey="storey:loft", elevation=3.0)):
