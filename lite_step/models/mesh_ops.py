@@ -86,7 +86,8 @@ def mesh_subdivide(mesh: "Mesh", *, height_map_only: bool = False) -> "Mesh":
 
     Returns a new Mesh instance without mutating the input mesh.
     """
-    out = mesh.model_copy(deep=True)
+    from lite_step.models.elements import detached_copy
+    out = detached_copy(mesh)
 
     if height_map_only:
         if mesh.heightmap is None:
@@ -177,7 +178,8 @@ def mesh_smooth(mesh: "Mesh", strength: int = 50, *, height_map_only: bool = Fal
     Returns a new Mesh instance without mutating the input mesh.
     """
     _validate_strength(strength)
-    out = mesh.model_copy(deep=True)
+    from lite_step.models.elements import detached_copy
+    out = detached_copy(mesh)
 
     if height_map_only:
         if mesh.heightmap is None:
@@ -266,7 +268,8 @@ def mesh_add_random(
     """
     _validate_add_random_strength(strength)
     _validate_walk(walk)
-    out = mesh.model_copy(deep=True)
+    from lite_step.models.elements import detached_copy
+    out = detached_copy(mesh)
 
     rng = np.random.RandomState(seed)
     amplitude = float(strength)  # Direct millimeter amplitude
@@ -347,7 +350,8 @@ def mesh_simplify(mesh: "Mesh", strength: int = 50, *, height_map_only: bool = F
     Returns a new Mesh instance without mutating the input mesh.
     """
     _validate_strength(strength)
-    out = mesh.model_copy(deep=True)
+    from lite_step.models.elements import detached_copy
+    out = detached_copy(mesh)
 
     if height_map_only or mesh.heightmap is not None:
         if height_map_only and mesh.heightmap is None:

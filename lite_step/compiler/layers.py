@@ -181,11 +181,12 @@ def _derive_box_slice(body, axis: str, lo: float, hi: float, material) -> object
     s_lo, e_hi = (lo, hi) if getattr(s, axis) <= getattr(e, axis) else (hi, lo)
     new_start = s.model_copy(update={axis: s_lo})
     new_end = e.model_copy(update={axis: e_hi})
-    sl = body.model_copy(deep=True, update={
+    from lite_step.models.elements import detached_copy
+    sl = detached_copy(body, **{
         "start": new_start, "end": new_end,
         "name": None, "material": material.key,
     })
-    # model_copy(deep=True) carries private attrs — clear the copied
+    # detached_copy carries private attrs — clear the copied
     # canonical (slices are anonymous; a copied Name would collide N-fold).
     sl._canonical_name = None
     # Same hygiene for the stamped frame: a slice is a generation-time
@@ -265,7 +266,8 @@ def extrude_layer_slices(elem, body) -> Optional[List[object]]:
             for p in body.contour
         ]
         thickness = s_hi - s_lo
-        sl = body.model_copy(deep=True, update={
+        from lite_step.models.elements import detached_copy
+        sl = detached_copy(body, **{
             "contour": shifted, "thickness": thickness,
             "name": None, "material": mat.key,
         })

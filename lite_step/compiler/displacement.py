@@ -1182,7 +1182,8 @@ def _carve_solid_host(host, occupant) -> None:
     # state verbatim (fresh identity → consumed as operand while the original,
     # a distinct object, still renders) and clears the name so the cut tool is
     # anonymous.
-    cut = occupant.model_copy(deep=True, update={"name": None})
+    from lite_step.models.elements import detached_copy
+    cut = detached_copy(occupant, name=None)
     # Tagged so the generator can tell an inferred carve from an authored
     # operand: one that builds no solid is a compile error, not a warning,
     # because the carve report below already lists it.
@@ -1549,8 +1550,9 @@ def _carve_one_void_host(host, voids, out) -> None:
             # and is consumed as an operand, exactly as in
             # ``_carve_solid_host``; the original is a distinct object and
             # still cuts the host.
+            from lite_step.models.elements import detached_copy
             carvee._cuts.append(
-                void.model_copy(deep=True, update={"name": None}))
+                detached_copy(void, name=None))
             # LOUD by default, same as the opening pass: a detail losing a
             # notch it did not ask for has to be findable without a re-render,
             # and this is the only line that records it.
