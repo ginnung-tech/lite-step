@@ -4,6 +4,7 @@ This directory contains editor and CAD extensions for working with **Lite-STEP**
 
 - **[Blender Extension](blender/)**: Live synchronization bridge for Blender (5.0+) with Bonsai and PBR presentation rendering.
 - **[VS Code Extension](vscode/)**: Authoring, compilation, 3D preview, and multi-target push synchronization for Lite-STEP DSL files (`.py`).
+- **[Lapin](lapin/)**: Lite-STEP models in [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller (in progress: the mapping is here, the sync is next).
 
 ---
 
@@ -52,6 +53,28 @@ To install directly into VS Code:
 ```bash
 code --install-extension tools/vscode/lite-step-1.0.0.vsix
 ```
+
+---
+
+## 3. Lapin (`tools/lapin`)
+
+[Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin) is an MIT desktop BIM modeller whose engine takes commands from programs on the same computer. This tool turns a compiled Lite-STEP model into Lapin operations. It needs nothing built: it runs from the checkout.
+
+```bash
+lite-step lapin ops model.py              # what each element becomes; no Lapin needed
+lite-step lapin ops model.py -o ops.json  # the same as JSON
+lite-step lapin ops model.ifc             # from an IFC already compiled
+```
+
+Each element becomes one of two things:
+
+| In Lapin | When | What the Lapin user can do |
+|---|---|---|
+| A Studio box or cylinder | The element is a box or cylinder standing on Z, turned about Z only | Resize, move, turn |
+| The same, cut by other elements | Everything cut from it is itself such an element, uncarved | The same; the cut follows both elements |
+| A body (a mesh with every cut applied) | Anything else | Move, schedule, export; the shape changes only from the script |
+
+A fallback to a body loses editability, never shape. The mapping is `lite_step/lapin/ops.py`; it reads the compiled IFC, so it describes exactly what the compiler wrote. Sending the operations to a running Lapin (`lite-step lapin push`) is not here yet.
 
 ---
 
