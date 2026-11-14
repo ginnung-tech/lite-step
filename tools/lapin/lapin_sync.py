@@ -38,7 +38,7 @@ def _digest(value: Any) -> str:
 
 def frame_of(op) -> str:
     """What cannot be changed on an element in place: when this differs, it is made again."""
-    return _digest([op.kind, op.ifc_class, op.storey, op.elevation, op.args.get("shape")])
+    return _digest([op.kind, op.ifc_class, op.storey, op.elevation, (op.args or {}).get("shape")])
 
 
 def owner_of(model_id: str) -> str:
@@ -54,16 +54,14 @@ class Owned:
     hash: str
     frame: str
     tools: list
-    #: For a primitive: its shape as the last sync set it, and as Lapin holds it now.
-    set_shape: Optional[dict] = None
+    #: For a primitive: its shape as Lapin holds it now. This, not a copy the sync kept,
+    #: is what the model is compared with.
     now_shape: Optional[dict] = None
+    is_body: bool = False
 
-    @property
-    def hand_edited(self) -> bool:
-        """A primitive the user resized, moved or turned in Lapin since the last sync."""
-        if self.set_shape is None or self.now_shape is None:
-            return False
-        return not _same_shape(self.set_shape, self.now_shape)
+    def differs_from(self, op) -> bool:
+        """Whether Lapin's primitive is not the box or cylinder the model asks for."""
+        return op.kind == "primitive" and self.now_shape is not None and not _same_shape(op.args, self.now_shape)
 
 
 def _same_shape(a: dict, b: dict) -> bool:
@@ -98,7 +96,7 @@ def marks(client) -> dict:
         try:
             mark = json.loads(params["Sync"])
             owned = Owned(element.id, mark["path"], mark["hash"], mark["frame"], list(mark.get("tools", [])),
-                          mark.get("shape"), _shape_now(element))
+                          _shape_now(element), bool(element.attrs.get("scriptOwned")))
             out.setdefault(mark["model"], {})[owned.path] = owned
         except (ValueError, KeyError, TypeError):
             # A mark someone edited: the element is no longer ours to change or delete.
@@ -110,6 +108,11 @@ def read_owned(client, model_id: str) -> dict:
     return marks(client).get(model_id, {})
 
 
+def known_bodies(owned: dict) -> dict:
+    """``{path: hash}`` of the bodies Lapin holds: what the mapping need not mesh again."""
+    return {path: have.hash for path, have in owned.items() if have.is_body}
+
+
 @dataclass
 class Plan:
     """What a sync would do. Built without changing anything."""
@@ -119,7 +122,7 @@ class Plan:
     replace: list = field(default_factory=list)  # (Op, Owned): deleted and made again
     delete: list = field(default_factory=list)   # Owned: gone from the script
     keep: list = field(default_factory=list)     # (Op, Owned): untouched
-    #: Paths of primitives the user changed in Lapin; the script's version is put back.
+    #: Paths of primitives changed in Lapin and not in the script; the script's version is put back.
     hand_edited: list = field(default_factory=list)
 
     @property
@@ -140,11 +143,11 @@ def plan(ops, owned: dict) -> Plan:
         if have is None:
             out.create.append(op)
             continue
-        if have.hand_edited:
-            out.hand_edited.append(op.path)
         if have.frame != frame_of(op):
             out.replace.append((op, have))
-        elif have.hash != op.hash or have.hand_edited:
+        elif have.hash != op.hash or have.differs_from(op):
+            if have.hash == op.hash:
+                out.hand_edited.append(op.path)  # the script did not change, so the user did
             out.update.append((op, have))
         else:
             out.keep.append((op, have))
@@ -184,14 +187,14 @@ def _storey_id(client, cache: dict, name: Optional[str], elevation: Optional[flo
 
 def _mark(client, element_id: str, model_id: str, op) -> None:
     mark = {"model": model_id, "path": op.path, "hash": op.hash, "frame": frame_of(op), "tools": list(op.tools)}
-    if op.kind == "primitive":
-        mark["shape"] = op.args
     client.execute("element.setParam", {"id": element_id, "pset": PSET, "name": "Path", "kind": "text", "value": op.path})
     client.execute("element.setParam", {"id": element_id, "pset": PSET, "name": "Sync", "kind": "text",
                                         "value": json.dumps(mark, sort_keys=True, separators=(",", ":"))})
 
 
 def _body(op) -> dict:
+    if op.args is None:
+        raise RuntimeError(f"{op.path} must be sent to Lapin but was not meshed")
     return {"vertices": op.args["vertices"], "faces": op.args["faces"]}
 
 

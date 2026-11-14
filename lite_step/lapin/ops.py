@@ -61,18 +61,25 @@ class Op:
     elevation: Optional[float]
     args: dict
     tools: tuple = ()
+    #: For a body: a digest of how the IFC describes it (its solids, booleans, openings and
+    #: placement). A body's hash is made from this, not from its mesh, so whether it changed
+    #: is known without meshing it. ``args`` is ``None`` for a body left unmeshed because
+    #: Lapin already holds it (see :func:`ops_from_ifc`).
+    source: Optional[str] = None
 
     @property
     def hash(self) -> str:
         """Changes when, and only when, what Lapin must build changes."""
-        payload = [self.kind, self.ifc_class, self.storey, self.elevation, self.args, list(self.tools)]
+        shape = self.args if self.source is None else self.source
+        payload = [self.kind, self.ifc_class, self.storey, self.elevation, shape, list(self.tools)]
         text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
     def to_dict(self) -> dict:
         return {
             "path": self.path, "kind": self.kind, "ifcClass": self.ifc_class, "storey": self.storey,
-            "elevation": self.elevation, "args": self.args, "tools": list(self.tools), "hash": self.hash,
+            "elevation": self.elevation, "args": self.args, "tools": list(self.tools), "source": self.source,
+            "hash": self.hash,
         }
 
 
@@ -118,7 +125,8 @@ def ops_from_json(text: str) -> LapinOps:
         raise ValueError(f"{FORMAT} version {data.get('version')!r} is not version {VERSION}")
     ops = []
     for o in data["ops"]:
-        op = Op(o["path"], o["kind"], o["ifcClass"], o["storey"], o["elevation"], o["args"], tuple(o["tools"]))
+        op = Op(o["path"], o["kind"], o["ifcClass"], o["storey"], o["elevation"], o["args"], tuple(o["tools"]),
+                o.get("source"))
         if op.hash != o["hash"]:
             raise ValueError(f"{op.path}: the hash does not match the operation (edited by hand?)")
         ops.append(op)
@@ -348,6 +356,58 @@ def _named(products: list, notes: list) -> list:
     return out
 
 
+def _describe(entity, memo: dict) -> str:
+    """A digest of an entity and everything it refers to, the same in every compile.
+
+    Entity numbers are left out (they are the file's bookkeeping), and what an entity
+    refers to goes in by its own digest, so two files that say the same solid give the
+    same digest however their lines are numbered.
+    """
+    key = entity.id()
+    if key and key in memo:
+        return memo[key]
+
+    def value(v):
+        if isinstance(v, (tuple, list)):
+            return [value(x) for x in v]
+        if hasattr(v, "is_a"):
+            return _describe(v, memo)
+        if isinstance(v, float):
+            return round(v, 9) + 0.0
+        return v
+
+    info = entity.get_info(recursive=False, include_identifier=False)
+    kind = info.pop("type")
+    info.pop("GlobalId", None)
+    digest = _digest_text([kind, [[k, value(v)] for k, v in sorted(info.items())]])
+    if key:
+        memo[key] = digest
+    return digest
+
+
+def _digest_text(value) -> str:
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+
+
+def _source(product, scale: float, memo: dict) -> str:
+    """How the IFC describes an element's shape: its body, where it stands, and its own openings."""
+    import ifcopenshell.util.placement as placement
+
+    def at(entity):
+        if entity.ObjectPlacement is None:
+            return None
+        m = np.array(placement.get_local_placement(entity.ObjectPlacement), dtype=float)
+        m[:3, 3] *= scale
+        return np.round(m, 9).tolist()
+
+    parts = [at(product), _describe(product.Representation, memo)]
+    for rel in sorted(product.HasOpenings, key=lambda r: r.RelatedOpeningElement.Name or ""):
+        opening = rel.RelatedOpeningElement
+        parts.append([at(opening), _describe(opening.Representation, memo) if opening.Representation else None])
+    return _digest_text(parts)
+
+
 def _meshes(model, products: list, openings: bool) -> dict:
     """``{product id: (vertices, faces)}`` in world metres, every boolean applied.
 
@@ -367,7 +427,9 @@ def _meshes(model, products: list, openings: bool) -> dict:
     settings.set("weld-vertices", True)
     settings.set("disable-opening-subtractions", not openings)
     out = {}
-    threads = max(1, min(4, multiprocessing.cpu_count() // 2))
+    # The work is in ifcopenshell's own threads (OpenCascade booleans: a clipped roof tile
+    # takes seconds). Leave two cores to the rest of the computer.
+    threads = max(1, min(len(products), multiprocessing.cpu_count() - 2))
     iterator = ifcopenshell.geom.iterator(settings, model, threads, include=products)
     if not iterator.initialize():
         return out
@@ -381,11 +443,18 @@ def _meshes(model, products: list, openings: bool) -> dict:
             return out
 
 
-def ops_from_ifc(model: Any) -> LapinOps:
+def ops_from_ifc(model: Any, known: Optional[dict] = None) -> LapinOps:
     """The Lapin operations for a compiled model.
 
     ``model`` is an ``ifcopenshell.file``, or a path to one. The caller keeps
     the file open for as long as this runs.
+
+    ``known`` is ``{path: hash}`` for the bodies Lapin already holds. A body with
+    the same hash is not meshed (meshing is nearly all the work on a large model):
+    its operation comes back with ``args`` ``None``, enough to see that nothing has
+    to be sent. Without ``known`` every body is meshed. Should the IFC describe an
+    unchanged body differently in another compile, that body is meshed and sent
+    again; the shape in Lapin is right either way.
     """
     import ifcopenshell
     import ifcopenshell.util.placement as placement
@@ -450,14 +519,23 @@ def ops_from_ifc(model: Any) -> LapinOps:
             if base is not None:
                 result.notes.append(f"{path}: sent as a body because {why}")
 
-    meshes = _meshes(model, [p for _, p, _ in meshed if p.HasOpenings], openings=True)
-    meshes.update(_meshes(model, [p for _, p, _ in meshed if not p.HasOpenings], openings=False))
+    memo: dict = {}
+    todo = []
     for path, p, where in meshed:
+        op = Op(path, "body", p.is_a(), *where, None, (), _source(p, scale, memo))
+        if known is not None and known.get(path) == op.hash:
+            ops[path] = op  # Lapin holds this body already: no mesh needed
+        else:
+            todo.append((op, p))
+    meshes = _meshes(model, [p for _, p in todo if p.HasOpenings], openings=True)
+    meshes.update(_meshes(model, [p for _, p in todo if not p.HasOpenings], openings=False))
+    for op, p in todo:
         mesh = meshes.get(p.id())
         if mesh is None:
-            result.skipped.append((path, "ifcopenshell produced no geometry for it"))
+            result.skipped.append((op.path, "ifcopenshell produced no geometry for it"))
             continue
-        ops[path] = Op(path, "body", p.is_a(), *where, {"vertices": mesh[0], "faces": mesh[1]})
+        ops[op.path] = Op(op.path, "body", op.ifc_class, op.storey, op.elevation,
+                          {"vertices": mesh[0], "faces": mesh[1]}, (), op.source)
 
     result.ops = [ops[path] for path, *_ in drafts if path in ops]
     result.storeys.sort(key=lambda s: (s[1], s[0] or ""))  # lowest first

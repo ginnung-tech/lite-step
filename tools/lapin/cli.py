@@ -46,12 +46,15 @@ class Failed(Exception):
 # --------------------------------------------------------------------------- the model
 
 
-def load_ops(source: Path):
-    """The operations for a model file (compiled first) or for an IFC already compiled."""
+def load_ops(source: Path, known: dict | None = None):
+    """The operations for a model file (compiled first) or for an IFC already compiled.
+
+    ``known``: the bodies Lapin already holds, which are then not meshed again.
+    """
     from lite_step.lapin import ops_from_ifc
 
     if source.suffix.lower() == ".ifc":
-        return ops_from_ifc(source)
+        return ops_from_ifc(source, known)
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
 
@@ -66,7 +69,7 @@ def load_ops(source: Path):
             compile_main(result=result, source_path=str(source), output_name=str(ifc))
         except LiteStepCompileError:
             raise Failed(f"{source} did not compile (the errors are above).") from None
-        return ops_from_ifc(ifc)
+        return ops_from_ifc(ifc, known)
 
 
 def model_id(args) -> str:
@@ -132,8 +135,9 @@ def print_plan(the_plan, out=sys.stdout, verbose: bool = False) -> None:
 
 
 def push_once(args, client) -> int:
-    ops = load_ops(Path(args.source).resolve())
-    the_plan = lapin_sync.plan(ops, lapin_sync.read_owned(client, model_id(args)))
+    owned = lapin_sync.read_owned(client, model_id(args))
+    ops = load_ops(Path(args.source).resolve(), lapin_sync.known_bodies(owned))
+    the_plan = lapin_sync.plan(ops, owned)
     for path, reason in ops.skipped:
         print(f"LEFT OUT {path}: {reason}", file=sys.stderr)
     print_plan(the_plan, verbose=args.verbose or args.dry_run)
@@ -184,7 +188,7 @@ def cmd_diff(args) -> int:
 def cmd_list(args) -> int:
     with connect(args) as client:
         owned = lapin_sync.read_owned(client, model_id(args))
-        ops = load_ops(Path(args.source).resolve())
+        ops = load_ops(Path(args.source).resolve(), lapin_sync.known_bodies(owned))
     the_plan = lapin_sync.plan(ops, owned)
     state = {o.path: "not in Lapin yet" for o in the_plan.create}
     state.update({o.path: "changed in the script" for o, _ in [*the_plan.update, *the_plan.replace]})
@@ -223,8 +227,7 @@ def cmd_status(args) -> int:
         if not all_marks:
             print("  no Lite-STEP elements in this project")
         for name, owned in sorted(all_marks.items()):
-            edited = sum(1 for o in owned.values() if o.hand_edited)
-            print(f"  model `{name}`: {len(owned)} elements" + (f", {edited} changed in Lapin" if edited else ""))
+            print(f"  model `{name}`: {len(owned)} elements")
     return 0
 
 

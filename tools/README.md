@@ -96,10 +96,10 @@ A fallback to a body loses editability, never shape.
 ### How a push behaves
 
 - **One undo step.** Ctrl+Z in Lapin undoes a whole push. A push that fails part way leaves the project as it was.
-- **Only what changed.** An unchanged element is not touched. A changed one keeps its id in Lapin, so what the user attached to it survives. A second push of the same model sends nothing.
+- **Only what changed.** An unchanged element is not touched, and an unchanged body is not even meshed (it is compared by how the IFC describes it), so a push of an unchanged large model takes seconds. A changed element keeps its id in Lapin, so what the user attached to it survives. A second push of the same model sends nothing.
 - **Only its own elements.** The tool marks what it makes (two parameters in the set `LiteStep`) and never changes or deletes anything else: not what you drew, not another model's elements, not a storey.
 - **Several models in one project.** Each is marked with its id: the file's name without its ending, or `--id`.
-- **The script wins.** A box you resized by hand in Lapin is put back at the next push, and the push names it. Edits in Lapin do not flow back into the script.
+- **The script wins.** A box you resized, moved or turned by hand in Lapin (compared with what Lapin holds now) is put back at the next push, and the push names it. Edits in Lapin do not flow back into the script.
 - **Storeys** are matched by name, then by elevation; a missing one is created.
 
 ### Working against a model that is already in Lapin

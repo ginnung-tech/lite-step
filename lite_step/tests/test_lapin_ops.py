@@ -53,11 +53,11 @@ def _post():
     return Box(name="post", start=P(x=900, y=400, z=-200), end=P(x=1100, y=600, z=2000))
 
 
-def _l_post():
+def _l_post(dx=0):
     """A post no primitive can say: an L in plan, cutting the slab like ``_post``."""
     return Extrude(name="lpost", thickness=2200, contour=[
-        P(x=900, y=400, z=-200), P(x=1100, y=400, z=-200), P(x=1100, y=500, z=-200),
-        P(x=1000, y=500, z=-200), P(x=1000, y=600, z=-200), P(x=900, y=600, z=-200)])
+        P(x=900 + dx, y=400, z=-200), P(x=1100 + dx, y=400, z=-200), P(x=1100 + dx, y=500, z=-200),
+        P(x=1000 + dx, y=500, z=-200), P(x=1000 + dx, y=600, z=-200), P(x=900 + dx, y=600, z=-200)])
 
 
 # --------------------------------------------------------------------------- primitives
@@ -232,3 +232,18 @@ def test_another_format_a_newer_version_and_an_edited_op_are_refused():
     data["ops"][0]["args"]["width"] = 9.0
     with pytest.raises(ValueError, match="the hash does not match"):
         ops_from_json(json.dumps(data))
+
+
+def test_a_body_lapin_already_holds_is_not_meshed_and_a_changed_one_is():
+    far = lambda: Box(name="far", start=P(x=5000, y=0, z=0), end=P(x=6000, y=1000, z=1000))  # noqa: E731
+    first, _ = _ops(far(), _l_post())
+    known = {o.path: o.hash for o in first.ops if o.kind == "body"}
+    assert list(known) == ["extrude:lpost:storey:ground"]
+
+    _, model = _ops(far(), _l_post())
+    body = _by_leaf(ops_from_ifc(model, known))["lpost"]
+    assert body.args is None and body.hash == known[body.path], "same IFC description: not meshed"
+
+    _, model = _ops(far(), _l_post(dx=100))
+    body = _by_leaf(ops_from_ifc(model, known))["lpost"]
+    assert body.args is not None and body.hash != known[body.path], "moved: meshed and sent"
