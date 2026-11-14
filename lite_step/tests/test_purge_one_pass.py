@@ -104,3 +104,30 @@ class TestDropPurgedDirectly:
         assert _drop_purged(entities, None) == 0
         assert _drop_purged(entities, set()) == 0
         assert set(entities) == {1}
+
+
+class TestDroppedBeforeTheRewrite:
+    """The generator now leaves the purged lines out of the serialized text
+    BEFORE the floats are rewritten (on a 52-storey tower they were 55 of 65
+    MB), and tells the deduplicator which ids it dropped so the closure is
+    still checked."""
+
+    def test_dropping_the_lines_first_gives_the_same_file(self):
+        from lite_step.ifc.generator import _without_lines
+
+        late, _ = deduplicate_ifc_step(MINIMAL, drop_ids={4})
+        early, _ = deduplicate_ifc_step(_without_lines(MINIMAL, {4}), dropped_ids={4})
+        assert early == late
+
+    def test_only_whole_entity_lines_go(self):
+        from lite_step.ifc.generator import _without_lines
+
+        out = _without_lines(MINIMAL, {1})
+        assert "#1=" not in out and "#3=IFCAXIS2PLACEMENT3D(#1,#2,$);" in out, "a reference is not a line"
+        assert _without_lines(MINIMAL, set()) == MINIMAL
+
+    def test_a_reference_into_the_dropped_lines_still_raises(self):
+        from lite_step.ifc.generator import _without_lines
+
+        with pytest.raises(ValueError, match="not reference-closed"):
+            deduplicate_ifc_step(_without_lines(MINIMAL, {1}), dropped_ids={1})
