@@ -500,6 +500,14 @@ def has_frame_basis(elem) -> bool:
     return False
 
 
+#: Bounds already worked out in the current :func:`stamp_frames` pass, by ``id``.
+#: ``None`` outside a pass. A pass writes only ``_frame``, never a point, so a
+#: subtree's bounds cannot change while it runs; between passes they can
+#: (anchors are baked between two of them), which is why the memo never
+#: outlives one.
+_BASIS_MEMO: Optional[Dict[int, Optional[AABB]]] = None
+
+
 def frame_basis_aabb(elem) -> Optional[AABB]:
     """Axis-aligned bounds of :func:`frame_basis_points`.
 
@@ -509,8 +517,43 @@ def frame_basis_aabb(elem) -> Optional[AABB]:
     :func:`element_aabb` and keeps seeing anchored children, because clipping
     an anchored cornice out of an orthographic view is just as wrong as
     letting it steer the wall's thickness.
+
+    Inside :func:`stamp_frames` the bounds are built bottom-up from the
+    children's, each subtree once. Walking every point under every node made
+    the pass quadratic in depth: 260,000 calls and 52 million steps on a
+    52-storey tower, 18 s of its compile.
     """
-    return _aabb_of(frame_basis_points(elem))
+    if _BASIS_MEMO is None:
+        return _aabb_of(frame_basis_points(elem))
+    return _basis_aabb(elem, _BASIS_MEMO, WalkGuard())
+
+
+def _basis_aabb(elem, memo, guard) -> Optional[AABB]:
+    """:func:`frame_basis_aabb` from the children's bounds: the same gates, in the same places.
+
+    The root gates are :func:`frame_basis_points`'s; the walk is
+    :func:`_frame_basis_walk`'s (own points, then every child that is not an
+    anchored child, each through the root gates again).
+    """
+    from lite_step.models.elements import Door, Window
+
+    key = id(elem)
+    if key in memo:
+        return memo[key]
+    if isinstance(elem, (Window, Door)) or getattr(elem, "_anchor_spec", None) is not None:
+        memo[key] = None
+        return None
+    if not guard.enter(elem):
+        return None  # a containment cycle: the walk skips the re-entry, and so does this
+    try:
+        boxes = [_aabb_of(_own_points(elem))]
+        for child in (getattr(elem, "_elements", None) or []):
+            if not is_anchored_child(child):
+                boxes.append(_basis_aabb(child, memo, guard))
+    finally:
+        guard.leave(elem)
+    memo[key] = box = _union_aabb(boxes)
+    return box
 
 
 def _union_aabb(boxes) -> Optional[AABB]:
@@ -2274,14 +2317,19 @@ def stamp_frames(project) -> "object":
 
     Returns the same project, stamped in place.
     """
-    centers = scope_centers(project)
-    building = centers.get("building")
-    for storey in project.storeys:
-        storey_center = centers.get(f"storey:{id(storey)}") or building
-        spaces = _spaces_in(storey)
-        for elem in storey.elements:
-            _walk(elem, (), storey_center, spaces)
-    site_center = centers.get("site")
-    for site in (getattr(project, "sites", None) or []):
-        _walk(site, (), site_center)
+    global _BASIS_MEMO
+    outer, _BASIS_MEMO = _BASIS_MEMO, {}
+    try:
+        centers = scope_centers(project)
+        building = centers.get("building")
+        for storey in project.storeys:
+            storey_center = centers.get(f"storey:{id(storey)}") or building
+            spaces = _spaces_in(storey)
+            for elem in storey.elements:
+                _walk(elem, (), storey_center, spaces)
+        site_center = centers.get("site")
+        for site in (getattr(project, "sites", None) or []):
+            _walk(site, (), site_center)
+    finally:
+        _BASIS_MEMO = outer
     return project

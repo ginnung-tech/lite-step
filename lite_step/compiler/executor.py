@@ -781,7 +781,7 @@ def _normalize_placements_recursive(elem) -> None:
 
 
 @suspends_strict
-def normalize_project_to_meters(project: Project) -> Project:
+def normalize_project_to_meters(project: Project, copy: bool = True) -> Project:
     """
     Normalize all Project dimensions from millimeters to meters.
     
@@ -793,14 +793,18 @@ def normalize_project_to_meters(project: Project) -> Project:
     
     Args:
         project: Project object with dimensions in millimeters
-        
+        copy: normalize a deep copy (the default) and leave ``project`` as it
+            was. ``False`` normalizes ``project`` itself, for a caller that
+            owns it and is done with it: copying a 33,000-node project costs
+            14 s, a tenth of a large compile.
+
     Returns:
-        New Project object with dimensions in meters
+        The Project with dimensions in meters: a new one, or ``project`` itself
+        when ``copy`` is False.
     """
     from copy import deepcopy
 
-    # Deep copy to avoid mutating original
-    normalized = deepcopy(project)
+    normalized = deepcopy(project) if copy else project
 
     # DSL v2.1: stamp canonical names top-down so the emitter reads
     # ``ifc_name`` = the stamped canonical. Idempotent; deepcopy preserves
@@ -1068,6 +1072,9 @@ def compile_main(
     Args:
         result: The Project to compile. Defaults to caller's ``result``
             module-global. Raises TypeError if neither is provided.
+            ``compile_main`` converts this Project to metres in place: do not
+            reuse it after the call, also not after a failed generation or
+            write. Run the model again for a second compile.
         source_path: Path to derive output dir from. Defaults to
             caller's ``__file__`` module-global.
         output_name: Filename written next to source. ``"output.ifc"``
@@ -1152,7 +1159,10 @@ def compile_main(
             reasons=errors,
         )
 
-    normalized = normalize_project_to_meters(result)
+    # In place: compile_main consumes ``result``. A model script ends here, and
+    # every caller in this repository compiles a project and discards it; the
+    # copy that kept ``result`` in millimetres cost 14 s on a large model.
+    normalized = normalize_project_to_meters(result, copy=False)
 
     from lite_step.ifc.generator import generate_ifc
 

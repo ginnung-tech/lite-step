@@ -493,6 +493,42 @@ _WELD_EPS_REL = 1e-9
 _WELD_EPS_MIN = 1e-12
 
 
+#: Above this many candidate pairs the check below gives up and the loop decides.
+#: It bounds the temporary arrays (indices and coordinate differences, about
+#: 100 bytes a pair) to some 50 MB: a mesh with thousands of vertices on one x
+#: plane would otherwise allocate hundreds of MB to prove nothing merges.
+_WELD_CANDIDATES_MAX = 500_000
+
+
+def _nothing_within(v: np.ndarray, eps: float) -> bool:
+    """True when no two vertices are within ``eps`` of each other on every axis.
+
+    Exact, and vectorised: two such vertices are within ``eps`` in x, so after
+    sorting by x each vertex's only candidates lie in a short window after it,
+    found by binary search. The window is padded a hair beyond ``eps`` so that
+    rounding in ``x + eps`` can never drop a pair; every candidate is then
+    tested with the loop's own comparison. ``False`` means "a pair may merge"
+    (or too many candidates to check this way): the loop decides.
+    """
+    n = len(v)
+    if n < 2:
+        return True
+    order = np.argsort(v[:, 0], kind="stable")
+    xs = v[order, 0]
+    reach = np.searchsorted(xs, xs + eps * (1 + 1e-9) + 1e-300, side="right")
+    counts = reach - np.arange(n) - 1
+    total = int(counts.sum())
+    if total == 0:
+        return True
+    if total > _WELD_CANDIDATES_MAX:
+        return False
+    first = np.repeat(np.arange(n), counts)
+    starts = np.repeat(np.cumsum(counts) - counts, counts)
+    second = first + (np.arange(total) - starts) + 1
+    gap = np.abs(v[order[first]] - v[order[second]])
+    return bool((gap > eps).any(axis=1).all())
+
+
 def weld_coincident_vertices(verts, faces, eps: float | None = None):
     """Merge vertices that are the SAME POINT but distinct INDICES.
 
@@ -565,6 +601,13 @@ def weld_coincident_vertices(verts, faces, eps: float | None = None):
         span = float(np.max(v.max(axis=0) - v.min(axis=0))) if len(v) > 1 else 0.0
         eps = max(span * _WELD_EPS_REL, _WELD_EPS_MIN)
 
+    # When no two vertices are within ``eps`` on every axis, nothing can merge
+    # and the loop below would return the mesh untouched. Proving that first is
+    # far cheaper than probing 27 cells per vertex (16,000 facade meshes, a
+    # million vertices: 9 s of a compile), and it is the common case.
+    if _nothing_within(v, eps):
+        return v, f
+
     cells = np.floor(v / eps).astype(np.int64)
     owner: dict[tuple[int, int, int], list[int]] = {}
     remap = np.empty(len(v), dtype=np.int64)
@@ -573,12 +616,17 @@ def weld_coincident_vertices(verts, faces, eps: float | None = None):
     neighbourhood = [(dx, dy, dz)
                      for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)]
 
-    for i in range(len(v)):
-        cx, cy, cz = int(cells[i, 0]), int(cells[i, 1]), int(cells[i, 2])
+    # Plain floats, not NumPy rows: the same float64 comparisons, without
+    # NumPy's per-call cost on three-element arrays, which was nearly all of
+    # this loop's time (9 s for 16,000 meshes on a 52-storey tower).
+    points = v.tolist()
+    for i, (cx, cy, cz) in enumerate(cells.tolist()):
+        xi, yi, zi = points[i]
         hit = -1
         for dx, dy, dz in neighbourhood:
             for j in owner.get((cx + dx, cy + dy, cz + dz), ()):
-                if np.all(np.abs(v[j] - v[i]) <= eps):
+                xj, yj, zj = points[j]
+                if abs(xj - xi) <= eps and abs(yj - yi) <= eps and abs(zj - zi) <= eps:
                     hit = j
                     break
             if hit >= 0:
