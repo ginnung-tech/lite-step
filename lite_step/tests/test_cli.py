@@ -201,3 +201,19 @@ def test_lapin_without_the_tools_folder_says_where_to_get_it(
     monkeypatch.setattr(cli, "__file__", str(tmp_path / "lite_step" / "__main__.py"))
     assert main(["lapin", "ops", "model.py"]) == 2
     assert "needs the tools folder of a Lite-STEP checkout" in capsys.readouterr().err
+
+
+def test_lapin_push_without_lapinbim_says_how_to_get_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """`lapinbim` is Lapin's package, not a requirement of the compiler: its absence is one clear message."""
+    monkeypatch.setitem(sys.modules, "lapinbim", None)  # an import of it now raises ImportError
+    assert main(["lapin", "push", str(_write_model(tmp_path)), "--port", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "needs its `lapinbim` package" in err and "pip install lapinbim" in err
+    assert "Traceback" not in err
+
+
+def test_lapin_ops_needs_no_lapinbim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "lapinbim", None)
+    assert main(["lapin", "ops", str(_write_model(tmp_path))]) == 0
