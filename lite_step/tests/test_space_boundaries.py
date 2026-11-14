@@ -863,7 +863,7 @@ class TestTheSpaceCarriesItsOwnGeometryOnce:
         proj, storey = _project()
         space(storey, "a")
         model = opened(compile_ifc(proj))
-        assert model.by_type("IfcBuildingElementProxy") == []
+        assert not model.by_type("IfcBuildingElementProxy")
 
     def test_the_space_still_carries_its_representation(self):
         proj, storey = _project()

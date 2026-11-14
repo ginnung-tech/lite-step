@@ -192,7 +192,7 @@ class TestTurnIfc:
         proj.add(Revolve(profile=ARCH_SECTION, path=ARCH_AXIS, angle=18000,
                       name="arch_1"))
         f, _ = compile_building(proj)
-        assert f.by_type("IfcRevolvedAreaSolid") == []
+        assert not f.by_type("IfcRevolvedAreaSolid")
         # …and what replaced it is still a SOLID, so a Revolve stays a legal
         # IfcBooleanOperand — the reason this is not a tessellation.
         item = product_by_name(f, "arch_1").Representation.Representations[0].Items[0]

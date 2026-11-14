@@ -5744,6 +5744,10 @@ def _mesh_is_where_it_should_be(elem, verts) -> bool:
     authored points — so the fault is in how the kernel evaluates it in this
     single-element model. Rather than guess at OCC, refuse the answer.
 
+    That was ifcopenshell 0.8; 0.9 (the floor in requirements.txt) evaluates
+    them correctly. The guard stays: it is the only check between a misplaced
+    tessellation and a carve in the wrong place, and it costs one bbox.
+
     Nothing caught it for months because the only existing guard on this
     function asserts vertex COUNT (`len(verts) < 20000`, the 443k-vert donut
     regression) and a reflected mesh has exactly the right count.
