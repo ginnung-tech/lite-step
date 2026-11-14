@@ -75,6 +75,7 @@ pip install <lapin checkout>/python       # until then
 |---|---|
 | `lite-step lapin status` | The Lapins open on this computer, and the IFC files linked in the chosen one |
 | `lite-step lapin push model.py` | Compiles to `model.ifc` beside the script, then links it into Lapin; later pushes reload that link. `--watch` pushes again at every save |
+| `lite-step lapin pull model.py` | Writes the parameters changed in Lapin into the script (see below) |
 | `lite-step lapin fetch -o context.ifc` | The open Lapin project as IFC, to read or build against |
 | `lite-step lapin remove model.py` | Unlinks the model from Lapin (Ctrl+Z there brings it back) |
 
@@ -87,6 +88,23 @@ Every command takes `--port N` or `--project NAME` when several Lapins are open.
 - **A push is a reload.** The link is found by its file's path. Lite-STEP's GlobalIds are derived from each element's name and the project's, so a reloaded element is the same element to Lapin, and what you dimensioned or tagged there stays attached.
 - **Several models in one project.** Each is its own link; two scripts in different folders never touch each other.
 - **Your own work in Lapin is untouched**: what you draw there, views, sheets, dimensions.
+
+### Parameters: editing the model from Lapin
+
+A constant written with `param()` is a parameter:
+
+```python
+from lite_step import param
+
+ROOF_SLAB_THICK = param(250, "mm", "Roof slab thickness")
+```
+
+`param()` returns the value unchanged, so the script reads as before. A push publishes each parameter to Lapin as a project parameter (Manage → Project information), labelled with its unit, in the group `Lite-STEP <script name>`. Change it there, and:
+
+- `lite-step lapin pull model.py` writes the new value into the script, in that one line and nowhere else (comments and layout stay);
+- `lite-step lapin push model.py --watch` does that by itself, then compiles and reloads, so the model in Lapin follows the parameter in a few seconds.
+
+The script wins a conflict: a push overwrites a value changed in Lapin that was not pulled, and says so. A parameter whose value the script computes (`param(WIDTH * 2, ...)`) is not published. A whole number stays whole: 400.5 for a millimetre parameter is refused, not rounded. Lapin keeps a few keys for its own project fields (`NAME`, for one): such a parameter is reported and not published; rename the constant.
 
 ---
 
