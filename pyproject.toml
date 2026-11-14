@@ -9,8 +9,8 @@
 #
 # The dependency list itself is requirements.txt, read below, so there is
 # one list. Do not put `-e .` in requirements.txt: pip reads it against the
-# folder it is run from, and the groa pack's CI installs this file from
-# another folder (`pip install -r lite-step/requirements.txt`).
+# folder it is run from, and projects that embed Lite-STEP install this file
+# from their own folder (`pip install -r lite-step/requirements.txt`).
 
 [build-system]
 requires = ["setuptools>=77"]   # 77: `license` as an SPDX string

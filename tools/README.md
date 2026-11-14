@@ -71,46 +71,22 @@ pip install <lapin checkout>/python       # until then
 
 ### Commands
 
-| Command | Does | Changes Lapin |
-|---|---|---|
-| `lite-step lapin status` | The Lapins open on this computer, their storeys, and the Lite-STEP models in them | no |
-| `lite-step lapin push model.py` | Compiles, then makes Lapin match the model. `--watch` pushes again at every save; `--dry-run` only says what would change | yes, one undo step |
-| `lite-step lapin diff model.py` | What a push would create, change and delete | no |
-| `lite-step lapin list model.py` | This model's elements in Lapin and the state of each | no |
-| `lite-step lapin fetch -o context.ifc` | The open Lapin project as IFC, to read or build against | no |
-| `lite-step lapin remove model.py` | Deletes what this model owns in Lapin, and nothing else | yes, one undo step |
-| `lite-step lapin ops model.py` | What each element becomes; needs no Lapin. `-o ops.json` writes it | no |
+| Command | Does |
+|---|---|
+| `lite-step lapin status` | The Lapins open on this computer, and the IFC files linked in the chosen one |
+| `lite-step lapin push model.py` | Compiles to `model.ifc` beside the script, then links it into Lapin; later pushes reload that link. `--watch` pushes again at every save |
+| `lite-step lapin fetch -o context.ifc` | The open Lapin project as IFC, to read or build against |
+| `lite-step lapin remove model.py` | Unlinks the model from Lapin (Ctrl+Z there brings it back) |
 
-Every command that talks to Lapin takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a compiled `.ifc`.
-
-### What each element becomes
-
-| In Lapin | When | What the Lapin user can do |
-|---|---|---|
-| A Studio box or cylinder | The element is a box or cylinder standing on Z, turned about Z only | Resize, move, turn |
-| The same, cut by other elements | Everything cut from it is itself such an element, uncarved | The same; the cut follows both elements |
-| A body (a mesh with every cut applied) | Anything else | Move, schedule, export; the shape changes only from the script |
-
-A fallback to a body loses editability, never shape.
+Every command takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a compiled `.ifc`.
 
 ### How a push behaves
 
-- **One undo step.** Ctrl+Z in Lapin undoes a whole push. A push that fails part way leaves the project as it was.
-- **Only what changed.** An unchanged element is not touched, and an unchanged body is not even meshed (it is compared by how the IFC describes it), so a push of an unchanged large model takes seconds. A changed element keeps its id in Lapin, so what the user attached to it survives. A second push of the same model sends nothing.
-- **Only its own elements.** The tool marks what it makes (two parameters in the set `LiteStep`) and never changes or deletes anything else: not what you drew, not another model's elements, not a storey.
-- **Several models in one project.** Each is marked with its id: the file's name without its ending, or `--id`.
-- **The script wins.** A box you resized, moved or turned by hand in Lapin (compared with what Lapin holds now) is put back at the next push, and the push names it. Edits in Lapin do not flow back into the script.
-- **Storeys** are matched by name, then by elevation; a missing one is created.
-
-### Working against a model that is already in Lapin
-
-`lite-step lapin fetch -o context.ifc` writes the open project as IFC. Read it for positions, storeys and sizes, write the script in the same coordinates, and push: only the script's elements are added. The fetched file is context; nothing reads it back.
-
-### Not carried yet
-
-Types, materials, colours and property sets. Openings are not separate elements in Lapin: they are already cut into their host.
-
-The mapping is `lite_step/lapin/ops.py` (it reads the compiled IFC, so it describes exactly what the compiler wrote); the delta is `tools/lapin/lapin_sync.py`.
+- **Lapin's own importer reads the model, as a link.** It is fast (a 10 MB, 11,800-element tower: 18 s to link, 13 s to reload), shapes the model shares stay shared, walls, slabs and doors are recognised as Lapin elements, and every element can be selected on its own. Nothing is grouped.
+- **Read-only in Lapin.** The script owns the model: change it there and push. Manage → Links → *Convert to native* hands elements over to Lapin for good; the script no longer updates them.
+- **A push is a reload.** The link is found by its file's path. Lite-STEP's GlobalIds are derived from each element's name and the project's, so a reloaded element is the same element to Lapin, and what you dimensioned or tagged there stays attached.
+- **Several models in one project.** Each is its own link; two scripts in different folders never touch each other.
+- **Your own work in Lapin is untouched**: what you draw there, views, sheets, dimensions.
 
 ---
 

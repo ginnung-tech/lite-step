@@ -41,7 +41,7 @@ def _run_tool(name: str, argv: list[str]) -> int:
     if not cli.is_file():
         print(
             f"error: `lite-step {name}` needs the tools folder of a Lite-STEP checkout "
-            f"(looked for {cli}). Get it from https://github.com/ginnung-tech/lite-step.",
+            f"(looked for {cli}): clone the Lite-STEP repository and run it from there.",
             file=sys.stderr,
         )
         return 2

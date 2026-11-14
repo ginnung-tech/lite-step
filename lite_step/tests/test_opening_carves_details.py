@@ -283,18 +283,18 @@ def test_the_opening_verb_on_a_container_emits_the_window() -> None:
 
 
 def test_the_two_verbs_compile_to_the_same_model() -> None:
-    """Byte-identical once GlobalIds (which are random per run) are erased."""
-    anchored = _without_guids(_compiled(_project(_wall(verb="anchor"))))
-    opened = _without_guids(_compiled(_project(_wall(verb="opening"))))
+    """Byte-identical, GlobalIds included (they derive from the model, lite-step#9)."""
+    anchored = _without_run_noise(_compiled(_project(_wall(verb="anchor"))))
+    opened = _without_run_noise(_compiled(_project(_wall(verb="opening"))))
     assert anchored == opened
 
 
-def _without_guids(ifc_text: str) -> str:
+def _without_run_noise(ifc_text: str) -> str:
     """Erase everything that varies between two runs of the SAME input.
 
-    Three things do, and none of them is geometry:
+    Two things do, and neither is geometry. GlobalIds are not among them: they
+    derive from the model (lite-step#9), so they are compared as they are.
 
-    * **GlobalIds** — random per run, by design.
     * **``IFCUNITASSIGNMENT`` member order** — ifcopenshell emits the set in
       iteration order, which varies run to run.
     * **The ``FILE_NAME`` header timestamp** — whole seconds. The two models
@@ -309,8 +309,7 @@ def _without_guids(ifc_text: str) -> str:
     """
     import re
 
-    text = re.sub(r"'[0-9A-Za-z_$]{22}'", "'<guid>'", ifc_text)
-    text = re.sub(r"(FILE_NAME\(''\,)'[^']*'", r"\1'<timestamp>'", text)
+    text = re.sub(r"(FILE_NAME\(''\,)'[^']*'", r"\1'<timestamp>'", ifc_text)
     return re.sub(
         r"IFCUNITASSIGNMENT\(\(([^)]*)\)\)",
         lambda m: "IFCUNITASSIGNMENT((%s))" % ",".join(sorted(m.group(1).split(","))),

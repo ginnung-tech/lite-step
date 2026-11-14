@@ -34,10 +34,11 @@ if __name__ == "__main__":
 You need **Python 3.12 or newer** ([python.org](https://www.python.org/downloads/);
 on Windows, tick *Add python.exe to PATH* in the installer) and **git**.
 
-**1. Get the code**
+**1. Get the code.** On this repository's GitHub page, *Code* gives its
+address; then:
 
 ```bash
-git clone https://github.com/ginnung-tech/lite-step.git
+git clone <that address>
 cd lite-step
 ```
 

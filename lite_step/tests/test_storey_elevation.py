@@ -316,8 +316,7 @@ class TestTheAttributeChangesNothingElse:
 
         ``Elevation`` is an attribute on an EXISTING entity, not a new named
         product, so it cannot mint a patch atom. The two manifests are
-        compared key-for-key at two different elevations; only the GlobalIds
-        (fresh per compile) may differ.
+        compared key-for-key at two different elevations.
         """
         flat = manifest_of(compile_ok(single_storey_at(0), "ifcopenshell"))
         raised = manifest_of(compile_ok(single_storey_at(3000), "ifcopenshell"))
