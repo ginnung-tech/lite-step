@@ -351,4 +351,5 @@ def test_lapin_ctrl_c_stops_without_a_traceback(
     monkeypatch.setattr(fake_lapin, "call", interrupted)
     assert main(["lapin", "push", str(_write_model(tmp_path)), "--port", "1"]) == 130
     err = capsys.readouterr().err
-    assert "stopped." in err and "Traceback" not in err
+    assert "stopped." in err
+    assert "Traceback" not in err
