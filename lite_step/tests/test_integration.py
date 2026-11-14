@@ -68,7 +68,7 @@ class TestEmbeddingRoundTrip:
         assert meta is not None
         assert meta.source == CARPORT_SOURCE
         assert meta.hash_valid is True
-        assert meta.version == "19"  # Box(rotations=) deleted
+        assert meta.version == "20"  # contour carves emitted; IFC 4.3 where-rules
 
     def test_manifest_has_elements(self):
         """Manifest should contain all named elements."""

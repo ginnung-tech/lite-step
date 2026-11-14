@@ -101,7 +101,16 @@ LITESTEP_META_PSET_NAME = "LITESTEP_META"
 #: every bounds query ignored it) and now stops at construction with a message
 #: naming the replacement. Zero uses in the skills corpus; the reach is stored
 #: user models.
-LITESTEP_META_VERSION = "19"
+#: v20 — two changes to what a stored source compiles to. (1) #18: a contour
+#: ``Extrude`` is a boolean operand and a contour host takes every operand
+#: type, so an inferred carve that used to be dropped with a warning is now in
+#: the file — the v11 shape: the source executes unchanged and compiles to a
+#: different solid (measured: a park bench went from 38 to 185 booleans). (2)
+#: the IFC 4.3 where-rules (#15, #16): anonymous proxies are named, grid axes
+#: are 2D with the height on the grid, a clip on a non-swept solid is an
+#: ``IfcBooleanResult``, a brep Revolve is labelled ``Brep``. No geometry moves
+#: in (2); it is the file a reader walks that changes.
+LITESTEP_META_VERSION = "20"
 
 
 @dataclass
