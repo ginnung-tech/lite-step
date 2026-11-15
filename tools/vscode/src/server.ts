@@ -192,13 +192,19 @@ export class LiteStepServer {
 
     console.log(`[Lite-STEP] Stored current model pair in server memory (batch: ${batchId}).`);
 
+    // The command rides on a real file push: the contract requires
+    // `content`, and a page drops a file.push without it, wipe and all
+    // (found by the whole-chain e2e, 2026-11-15). The page discards this
+    // copy because the wipe reloads it; the pair arrives in the re-send.
     const wipeMsg = JSON.stringify({
       type: "file.push",
-      version: "1.1",
+      version: "1.3",
       id: `wipe-${Date.now()}`,
       direction: "to-client",
       filename: pyFilename,
       fileType: "python",
+      content: pyContent,
+      sizeBytes: Buffer.byteLength(pyContent, "utf-8"),
       command: "/delete:all",
       batchId,
     });

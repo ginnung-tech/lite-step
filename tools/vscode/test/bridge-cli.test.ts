@@ -72,6 +72,11 @@ describe("bridge-cli", { timeout: 15000 }, () => {
     await wait(100);
     const wipe = page.frames.find((f) => f.command === "/delete:all");
     assert.ok(wipe, JSON.stringify(page.frames));
+    // What the Ginnung page requires of any file.push (contract local-bridge,
+    // `content` required): without it the page drops the frame, wipe and all.
+    assert.equal(typeof wipe!.content, "string");
+    assert.equal(wipe!.fileType, "python");
+    assert.equal(typeof wipe!.batchId, "string");
     page.ws.close();
 
     const reloaded = await connect("https://ginnung.tech");
