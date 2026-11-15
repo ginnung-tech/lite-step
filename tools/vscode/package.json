@@ -2,7 +2,7 @@
   "name": "lite-step",
   "displayName": "Lite-STEP",
   "description": "IFC sync, Lite-STEP compilation, and 3D preview",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "publisher": "lite-step",
   "license": "MIT",
   "engines": {
@@ -164,15 +164,11 @@
         },
         "litestep.allowedOrigins": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5180",
-            "http://127.0.0.1:5180",
-            "vscode-webview://"
-          ],
-          "description": "Allowed origins for incoming WebSocket connections"
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra web origins allowed to connect to the local server, besides the built-in `https://ginnung.tech`. Each entry is a bare origin matched exactly, for example `https://app.example.com`. It must be `https://`; `http://` is accepted only on `localhost` or `127.0.0.1` (for example `http://localhost:5173`). No wildcards, paths or trailing slash. Restart the server after changing it."
         },
         "litestep.autoStartServer": {
           "type": "boolean",
@@ -186,8 +182,10 @@
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
-    "package": "npx @vscode/vsce package --no-dependencies",
-    "lint": "tsc --noEmit"
+    "package": "vsce package --no-dependencies",
+    "lint": "tsc --noEmit",
+    "build:cli": "esbuild src/bridge-cli.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out-cli/bridge-cli.js --log-level=warning",
+    "test": "npm run build:cli && esbuild test/*.test.ts --bundle --platform=node --format=cjs --outdir=out-test --log-level=warning && node --test --test-force-exit \"out-test/*.js\""
   },
   "dependencies": {
     "ws": "^8.16.0"
@@ -196,6 +194,7 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.0",
+    "@vscode/vsce": "4.1.0",
     "esbuild": "^0.28.1",
     "typescript": "^5.4.0"
   }

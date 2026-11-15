@@ -3,6 +3,7 @@ import logging
 from .server import server_instance
 from .bridge import load_ifc, export_ifc
 from .preferences import get_preferences
+from .origin_policy import split_entries
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +20,13 @@ class LiteStepStartServerOperator(bpy.types.Operator):
         prefs = get_preferences(context)
         port = prefs.port if prefs else 9876
         
+        origins = split_entries(prefs.allowed_origins) if prefs else []
+
         server_instance.on_file_received = load_ifc
-        server_instance.start(port=port, version="1.1")
-        
+        server_instance.start(port=port, version="1.3", allowed_origins=origins)
+
+        for problem in server_instance.rejected_origins:
+            self.report({'WARNING'}, f"Lite-STEP: ignored allowed-origin entry {problem}")
         self.report({'INFO'}, f"Lite-STEP Server started on port {port}")
         return {'FINISHED'}
 

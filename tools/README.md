@@ -18,15 +18,12 @@ An extension for Blender 5.0+ that runs a local WebSocket server (`ws://127.0.0.
 - **Presentation Shell (`model.blend`)**: Automatically locates and opens Lite-STEP's presentation shell (`lite_step/assets/model.blend`), binding PBR master shaders, environmental lighting, and floor plan CSS stylesheets.
 
 ### Installation
-1. Package the extension:
-   ```bash
-   python tools/build.py blender
-   # Generates tools/blender-litestep.zip
-   ```
+1. Download `blender-litestep-<version>.zip` from the repository's [Releases](../../../releases) page.
+   To build it yourself instead: `python tools/build.py blender` writes `tools/blender-litestep.zip`.
 2. Open Blender (5.0+).
 3. Navigate to **Edit** > **Preferences** > **Get Extensions**.
 4. In the upper-right corner dropdown menu (`⌵`), select **Install from Disk...**
-5. Select `tools/blender-litestep.zip` and enable the extension.
+5. Select the zip and enable the extension.
 6. Find the **Lite-STEP** panel in `View3D > N-Panel > Lite-STEP`.
 
 ---
@@ -42,16 +39,20 @@ A rich language and tooling extension for authoring buildings in Python with Lit
 - **Direct Push to Web Clients**: Push scripts or IFC models to connected WebSocket clients over `ws://127.0.0.1:9877`.
 - **Editor Ergonomics**: CodeLens compile triggers, file decorations, hover docs, and a dedicated status sidebar.
 
+### Installation
+Download `lite-step-<version>.vsix` from the repository's [Releases](../../../releases) page, then:
+```bash
+code --install-extension lite-step-<version>.vsix
+```
+Or, in VS Code: **Extensions** > `...` > **Install from VSIX...**
+
 ### Building & Packaging
 ```bash
 python tools/build.py vscode
 # Installs npm dependencies, compiles TypeScript with esbuild,
 # and generates a .vsix package in tools/vscode/
-```
 
-To install directly into VS Code:
-```bash
-code --install-extension tools/vscode/lite-step-1.0.0.vsix
+cd tools/vscode && npm test     # the connection rules, on a real socket
 ```
 
 ---
@@ -108,10 +109,34 @@ The script wins a conflict: a push overwrites a value changed in Lapin that was 
 
 ---
 
+## 4. Who may connect (Blender and VS Code)
+
+Both tools listen on this computer only (`127.0.0.1`), and a web page can reach that address. So each connection is checked before it is accepted:
+
+| Connection | Accepted? |
+|---|---|
+| A program on this computer (no `Origin` header): VS Code pushing to Blender, a script | Yes |
+| A web page whose origin is on the allowlist | Yes, after a handshake |
+| Any other web page | No: refused with a bare `403`, before anything is sent |
+| A request whose `Host` is not `127.0.0.1:<port>` or `localhost:<port>` | No (this stops DNS rebinding) |
+
+- **The allowlist** has one built-in entry, `https://ginnung.tech`. Add your own in the VS Code setting `litestep.allowedOrigins`, or in Blender under Preferences > Add-ons > Lite-STEP > *Allowed web origins* (separate with commas). Restart the server afterwards.
+- **An entry is one exact origin**, such as `https://app.example.com`. It must be `https://`; `http://` is accepted only on `localhost` or `127.0.0.1` (for example `http://localhost:5173` for a dev server). Wildcards, paths and a trailing slash are refused, and the tool tells you which entries it ignored.
+- **Why this is enough.** A page cannot set or forge its `Origin` header, and a browser sends `Origin: https://app.example.com` only for a page it loaded from that site over verified TLS. That is why entries must be `https://`, and why there is no token, pairing code or call to any server.
+- **The handshake.** The tool sends `hello`. A web page must answer `status: "connected"` within 5 seconds and send nothing before it; until then it is sent nothing else.
+- **What a web page may send.** To VS Code: `.py` and `.ifc` files, saved in a new folder of the workspace. To Blender: `.ifc` only, and it can never name a `.blend` file on your disk to open (`blendPath` is honoured from local programs only).
+- **A push is your action.** VS Code sends your model only when you press Push, and only to pages that completed the handshake. Saving a file sends nothing, and neither does a page connecting. If no page is connected, the push fails and says so; nothing is queued.
+
+Programs on this computer run as you and are trusted; these rules are about web pages.
+
+---
+
 ## Build Automation
 
 To build both tools at once:
 ```bash
 python tools/build.py
 ```
+
+Releases are built by `.github/workflows/release-tools.yml` when a `tools-v<version>` tag is pushed. The tag, `tools/vscode/package.json` and `tools/blender/blender_manifest.toml` must carry the same version.
 

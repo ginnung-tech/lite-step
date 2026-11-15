@@ -16,7 +16,8 @@ def build_hello(version: str) -> str:
     return json.dumps({
         "type": "hello",
         "version": version,
-        "capabilities": ["ifc.push"]
+        "capabilities": ["ifc.push"],
+        "source": "blender"
     })
 
 def build_status(msg_id: str, status: str) -> str:

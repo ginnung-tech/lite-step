@@ -13,9 +13,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { LiteStepServer } from "./server";
+import { vscodeHost } from "./vscode-host";
 import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
 import { isLiteStepFile, clearCache } from "./detection";
-import { buildDocumentSync } from "./protocol";
 import { PreviewPanel } from "./preview-panel";
 import { pushIfcToBlender } from "./blender-client";
 import { LiteStepCodeLensProvider } from "./providers/codelens";
@@ -44,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Server
   const config = vscode.workspace.getConfiguration("litestep");
   const port = config.get<number>("port", 9877);
-  server = new LiteStepServer(statusBarItem, port);
+  server = new LiteStepServer(vscodeHost(statusBarItem), port);
 
   // Handle incoming files pushed from web app → save in workspace root under litestep-<timestamp>
   server.onFileReceived = (file) => {
@@ -185,30 +185,6 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.languages.registerHoverProvider({ language: "python" }, hoverProvider),
     vscode.window.registerFileDecorationProvider(decorationProvider),
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (!server.isRunning || server.clientCount === 0) {
-        return;
-      }
-      const fsPath = doc.uri.fsPath.toLowerCase();
-      if (fsPath.endsWith(".ifc")) {
-        const syncMsg = buildDocumentSync(
-          path.basename(doc.uri.fsPath),
-          doc.getText(),
-          true
-        );
-        server.sendTextSync(syncMsg);
-      } else if (
-        fsPath.endsWith(".py") &&
-        isLiteStepFile(doc.getText(), doc.uri.fsPath)
-      ) {
-        const syncMsg = buildDocumentSync(
-          path.basename(doc.uri.fsPath),
-          doc.getText(),
-          false
-        );
-        server.sendTextSync(syncMsg);
-      }
-    }),
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document.languageId === "python") {
         clearCache();
@@ -229,6 +205,10 @@ export function deactivate() {
 }
 
 // ── Helpers ────────────────────────────────────────────────
+
+/** Shown when Push finds no page connected: nothing is queued (protocol 1.2). */
+const NOT_CONNECTED =
+  "Lite-STEP: no web app is connected, so nothing was pushed. Open the web app, choose VS Code in its connection menu, then push again.";
 
 function getWorkspaceRoot(): string {
   if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
@@ -335,7 +315,10 @@ async function pushFileToWeb(filePath: string): Promise<void> {
         const pyContent = fs.readFileSync(filePath, "utf-8");
         const ifcContent = fs.readFileSync(compResult.ifcPath, "utf-8");
 
-        server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
+        if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
+          vscode.window.showWarningMessage(NOT_CONNECTED);
+          return;
+        }
 
         vscode.window.showInformationMessage(
           `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
@@ -359,7 +342,10 @@ async function pushFileToWeb(filePath: string): Promise<void> {
       pyContent = fs.readFileSync(workspacePy, "utf-8");
     }
 
-    server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
+    if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
+      vscode.window.showWarningMessage(NOT_CONNECTED);
+      return;
+    }
 
     vscode.window.showInformationMessage(
       `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`

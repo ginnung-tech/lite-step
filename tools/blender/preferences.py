@@ -26,6 +26,16 @@ class LiteStepPreferences(AddonPreferences):
         default="",
     ) # type: ignore
 
+    allowed_origins: StringProperty(
+        name="Allowed web origins",
+        description=(
+            "Extra web origins allowed to connect, besides the built-in https://ginnung.tech. "
+            "Separate with commas. Each is a bare origin matched exactly, e.g. https://app.example.com; "
+            "it must be https (http only on localhost or 127.0.0.1). Restart the server after changing it"
+        ),
+        default="",
+    ) # type: ignore
+
     execute_embedded_scripts: BoolProperty(
         name="Execute Embedded Sidecar Scripts",
         description="Allow running embedded init_sidecars.py scripts from opened presentation shells",
@@ -37,6 +47,7 @@ class LiteStepPreferences(AddonPreferences):
         layout.prop(self, "port")
         layout.prop(self, "auto_start")
         layout.prop(self, "blend_template")
+        layout.prop(self, "allowed_origins")
         layout.prop(self, "execute_embedded_scripts")
 
 def get_preferences(context=None):

@@ -1,0 +1,109 @@
+name: release-tools
+
+# Builds the VS Code extension (.vsix) and the Blender add-on (.zip) and
+# attaches them to a GitHub Release, so installing a tool is a download.
+#
+#   git tag tools-v1.2.0 && git push origin tools-v1.2.0
+#
+# The tag, tools/vscode/package.json and tools/blender/blender_manifest.toml
+# must carry the same version, or the release fails before anything is built.
+#
+# Only GitHub's own actions are used (the release itself is made with the
+# `gh` CLI the runner already has), so there is no third-party action to pin.
+
+on:
+  push:
+    tags:
+      - "tools-v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and test only; make no release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Versions agree
+        id: version
+        run: |
+          set -euo pipefail
+          vsix="$(node -p "require('./tools/vscode/package.json').version")"
+          blender="$(python -c "import tomllib; print(tomllib.load(open('tools/blender/blender_manifest.toml','rb'))['version'])")"
+          echo "vscode=$vsix blender=$blender ref=$GITHUB_REF"
+          if [ "$vsix" != "$blender" ]; then
+            echo "::error::tools/vscode/package.json ($vsix) and tools/blender/blender_manifest.toml ($blender) disagree"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "tools-v$vsix" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $vsix (expected tools-v$vsix)"
+            exit 1
+          fi
+          echo "version=$vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Test the connection rules (Blender add-on)
+        # Wheels only, pinned by hash. The test loads the add-on's modules
+        # directly and needs neither lite_step's dependencies nor its conftest.
+        run: |
+          pip install --only-binary :all: --require-hashes -r tools/requirements-test.txt
+          python -m pytest lite_step/tests/test_tools_blender_bridge.py -q --noconftest -p no:cacheprovider
+
+      - name: Test the connection rules (VS Code extension)
+        working-directory: tools/vscode
+        # --ignore-scripts: no dependency's install script runs. esbuild
+        # needs none; its binary comes from a platform package.
+        run: |
+          npm ci --ignore-scripts
+          npm run lint
+          npm test
+
+      - name: Build both tools
+        run: python tools/build.py
+
+      - name: Name the artefacts
+        id: artefacts
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          cp "tools/vscode/lite-step-$v.vsix" "dist/lite-step-$v.vsix"
+          cp tools/blender-litestep.zip "dist/blender-litestep-$v.zip"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lite-step-tools-${{ steps.version.outputs.version }}
+          path: dist/*
+
+      - name: Publish the release
+        # A tag push publishes. A manual run publishes only from a tag and
+        # only with dry_run turned off.
+        if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.dry_run == false)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Lite-STEP tools $v" \
+            --notes "VS Code extension and Blender add-on, version $v.
+
+          **VS Code:** download \`lite-step-$v.vsix\`, then run \`code --install-extension lite-step-$v.vsix\`.
+
+          **Blender (5.0+):** download \`blender-litestep-$v.zip\`, then Preferences > Get Extensions > Install from Disk.
+
+          Who may connect to the tools: see tools/README.md, section 4."

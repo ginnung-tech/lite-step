@@ -3,11 +3,18 @@
  *
  * Runs on 127.0.0.1 (configurable port, default 9877).
  * Implements the file push/pull protocol:
- *   hello → file.push / ifc.push / ifc.pull / status / error / document.sync
+ *   hello → file.push / ifc.push / status / error
+ *
+ * Who may connect, and the strict handshake for web pages, live in
+ * `origin-policy.ts` and `bridge-gate.ts`.
  */
 
+
+import type { IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
-import * as vscode from "vscode";
+import { ClientGate, makeVerifyClient, roleOf } from "./bridge-gate";
+import { allowedFile, parseAllowlist, type Allowlist } from "./origin-policy";
+import { OutstandingBatches, type ModelPair } from "./batches";
 import {
   buildHello,
   buildStatus,
@@ -26,11 +33,33 @@ export interface IncomingFile {
 
 export type OnFileReceived = (file: IncomingFile) => void;
 
+/**
+ * What the server needs from whatever runs it: VS Code (`vscode-host.ts`) or
+ * the headless `bridge-cli.ts` the cross-service e2e test starts. Keeping
+ * `vscode` out of this file is what lets that test run the real server.
+ */
+export interface ServerHost {
+  /** The user's extra allowed web origins (`litestep.allowedOrigins`). */
+  allowedOrigins(): readonly unknown[];
+  warn(message: string): void;
+  error(message: string): void;
+  /** Show the server's state (the status bar in VS Code). */
+  showStatus(text: string, tooltip: string): void;
+}
+
+export interface Disposable {
+  dispose(): void;
+}
+
 export class LiteStepServer {
   private _wss: WebSocketServer | null = null;
   private readonly _clients: Set<WebSocket> = new Set();
   private _port: number;
   private _onFileReceived: OnFileReceived | null = null;
+  private readonly _gate = new ClientGate();
+  private _allowlist: Allowlist = parseAllowlist([]);
+  /** `/delete:all` batches still owed to the pages that ran them (`batches.ts`). */
+  private readonly _outstanding = new OutstandingBatches();
 
   /** Per-client state for incoming binary frames */
   private readonly _incomingState: Map<
@@ -38,14 +67,19 @@ export class LiteStepServer {
     { id: string; filename: string; sizeBytes: number }
   > = new Map();
 
-  private readonly _statusBarItem: vscode.StatusBarItem;
+  private readonly _host: ServerHost;
   private readonly _heartbeatIntervals: Map<WebSocket, ReturnType<typeof setInterval>> =
     new Map();
-  private readonly _onDidChangeStatus = new vscode.EventEmitter<void>();
-  public readonly onDidChangeStatus = this._onDidChangeStatus.event;
+  private readonly _statusListeners = new Set<() => void>();
 
-  constructor(statusBarItem: vscode.StatusBarItem, port: number = 9877) {
-    this._statusBarItem = statusBarItem;
+  /** Called whenever the server starts, stops, or a client comes or goes. */
+  onDidChangeStatus(listener: () => void): Disposable {
+    this._statusListeners.add(listener);
+    return { dispose: () => this._statusListeners.delete(listener) };
+  }
+
+  constructor(host: ServerHost, port: number = 9877) {
+    this._host = host;
     this._port = port;
     this._updateStatusBar();
   }
@@ -75,32 +109,25 @@ export class LiteStepServer {
       this._port = port;
     }
 
-    const config = vscode.workspace.getConfiguration("litestep");
-    const allowedOrigins = config.get<string[]>("allowedOrigins", [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      "http://localhost:5180",
-      "http://127.0.0.1:5180",
-      "vscode-webview://",
-    ]);
+    this._allowlist = parseAllowlist(this._host.allowedOrigins());
+    const ignored = this._allowlist.rejected;
+    if (ignored.length > 0) {
+      this._host.warn(
+        `Lite-STEP: ignored ${ignored.length} entr${ignored.length === 1 ? "y" : "ies"} in litestep.allowedOrigins. ${ignored.join("; ")}`
+      );
+    }
 
     this._wss = new WebSocketServer({
       host: "127.0.0.1",
       port: this._port,
       maxPayload: 100 * 1024 * 1024,
-      verifyClient: (info: { origin: string }) => {
-        const origin = info.origin;
-        if (!origin) return true;
-        return allowedOrigins.some((allowed) => origin === allowed || origin.startsWith(allowed));
-      },
+      verifyClient: makeVerifyClient(this._allowlist, this._port),
     });
 
-    this._wss.on("connection", (ws) => this._handleConnection(ws));
+    this._wss.on("connection", (ws, req) => this._handleConnection(ws, req));
 
     this._wss.on("error", (err) => {
-      vscode.window.showErrorMessage(
-        `Lite-STEP server error: ${err.message}`
-      );
+      this._host.error(`Lite-STEP server error: ${err.message}`);
     });
 
     this._wss.on("listening", () => {
@@ -128,6 +155,7 @@ export class LiteStepServer {
     }
     this._clients.clear();
     this._incomingState.clear();
+    this._gate.clear();
 
     this._wss.close();
     this._wss = null;
@@ -137,47 +165,51 @@ export class LiteStepServer {
   }
 
   /** Current active model pair (output.py and output.ifc) */
-  private _currentModel: {
-    pyContent: string;
-    pyFilename: string;
-    ifcContent: string;
-    ifcFilename: string;
-  } | null = null;
 
-  /** Push both Python model and compiled IFC model by issuing /delete:all and waiting for reconnect */
+  /**
+   * Push the Python model and its compiled IFC: send /delete:all, then
+   * re-send the pair when the reloaded page asks for this batch by id.
+   *
+   * Returns false, and keeps nothing, when no client is connected: a push is
+   * a user action that either reaches a page now or fails (protocol 1.2).
+   */
   pushModelWithWipe(
     pyContent: string,
     ifcContent: string,
     pyFilename: string = "output.py",
     ifcFilename: string = "output.ifc"
-  ): void {
-    const batchId = `vsc-batch-${Date.now()}`;
-    this._currentModel = {
-      pyContent,
-      pyFilename,
-      ifcContent,
-      ifcFilename,
-    };
+  ): boolean {
+    const batchId = `vsc-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const recipients = this._readyClients();
+    if (recipients.length === 0) {
+      console.log("[Lite-STEP] No clients connected; nothing pushed.");
+      return false;
+    }
+    for (const id of this._outstanding.dropExpired()) {
+      console.warn(`[Lite-STEP] Batch ${id} was not asked for within two minutes; dropped.`);
+    }
+    this._outstanding.add(batchId, { pyContent, pyFilename, ifcContent, ifcFilename }, recipients.length);
 
     console.log(`[Lite-STEP] Stored current model pair in server memory (batch: ${batchId}).`);
 
-    if (this._clients.size === 0) {
-      console.log("[Lite-STEP] No clients connected to push wipe command to.");
-      return;
-    }
-
+    // The command rides on a real file push: the contract requires
+    // `content`, and a page drops a file.push without it, wipe and all
+    // (found by the whole-chain e2e, 2026-11-15). The page discards this
+    // copy because the wipe reloads it; the pair arrives in the re-send.
     const wipeMsg = JSON.stringify({
       type: "file.push",
-      version: "1.1",
+      version: "1.3",
       id: `wipe-${Date.now()}`,
       direction: "to-client",
       filename: pyFilename,
       fileType: "python",
+      content: pyContent,
+      sizeBytes: Buffer.byteLength(pyContent, "utf-8"),
       command: "/delete:all",
       batchId,
     });
 
-    for (const ws of this._clients) {
+    for (const ws of recipients) {
       try {
         ws.send(wipeMsg);
         console.log(`[Lite-STEP] Sent /delete:all wipe command to client.`);
@@ -185,16 +217,12 @@ export class LiteStepServer {
         console.error(`[Lite-STEP] Failed to send wipe command: ${e}`);
       }
     }
+    return true;
   }
 
-  /** Send current stored model pair to a client */
-  sendModelPairToClient(ws: WebSocket): void {
-    if (!this._currentModel) {
-      console.log("[Lite-STEP] No stored model to send to client.");
-      return;
-    }
-
-    const { pyContent, pyFilename, ifcContent, ifcFilename } = this._currentModel;
+  /** Send a batch's model pair to a client */
+  private _sendModelPair(ws: WebSocket, pair: ModelPair): void {
+    const { pyContent, pyFilename, ifcContent, ifcFilename } = pair;
     const batchId = `vsc-pair-${Date.now()}`;
 
     try {
@@ -228,45 +256,13 @@ export class LiteStepServer {
     }
   }
 
-  /** Send document.sync message to all connected clients */
-  broadcastDocumentSync(
-    documentId: "lite_step" | "ifc_step_file",
-    content: string,
-    contentType: "text/x-python" | "application/x-step",
-    fileName: string
-  ): void {
-    const id = `vsc-sync-${Date.now()}`;
-    const msg = JSON.stringify({
-      type: "document.sync",
-      version: "1.1",
-      id,
-      payload: {
-        documentId,
-        content,
-        contentType,
-        metadata: {
-          lastModified: Date.now(),
-          source: "vscode",
-          fileName,
-        },
-      },
-    });
-
-    this._broadcast(msg);
-  }
-
-  /** Send a document.sync text message to all clients */
-  sendTextSync(jsonMessage: string): void {
-    this._broadcast(jsonMessage);
-  }
-
   dispose(): void {
     this.stop();
   }
 
   /** Send raw text message to all connected clients */
   private _broadcast(text: string): void {
-    for (const ws of this._clients) {
+    for (const ws of this._readyClients()) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(text);
@@ -282,7 +278,7 @@ export class LiteStepServer {
     const id = `vsc-ifc-${Date.now()}`;
     const pushMsg = buildPush(id, "to-client", filename, ifcBytes.length);
 
-    for (const ws of this._clients) {
+    for (const ws of this._readyClients()) {
       if (ws.readyState === WebSocket.OPEN) {
         try {
           ws.send(pushMsg);
@@ -323,7 +319,21 @@ export class LiteStepServer {
     );
   }
 
-  private _handleConnection(ws: WebSocket): void {
+  /** Clients that completed the handshake: the only ones a push may reach. */
+  private _readyClients(): WebSocket[] {
+    return [...this._clients].filter((ws) => this._gate.isReady(ws));
+  }
+
+  private _handleConnection(ws: WebSocket, req: IncomingMessage): void {
+    // verifyClient already refused anything without a role; a null here would
+    // mean the two checks disagree, and the safe reading is "not allowed".
+    const role = roleOf(req, this._port, this._allowlist);
+    if (role === null) {
+      ws.close(1008, "not allowed");
+      return;
+    }
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : null;
+    this._gate.admit(ws, role, origin);
     this._clients.add(ws);
     console.log(
       `[Lite-STEP] Client connected. Total clients: ${this._clients.size}`
@@ -355,6 +365,7 @@ export class LiteStepServer {
     ws.on("close", () => {
       this._clients.delete(ws);
       this._incomingState.delete(ws);
+      this._gate.release(ws);
       const interval = this._heartbeatIntervals.get(ws);
       if (interval) {
         clearInterval(interval);
@@ -378,6 +389,11 @@ export class LiteStepServer {
       return;
     }
     const filename = msg.filename || "pushed_file.py";
+    if (!allowedFile(filename, msg.fileType)) {
+      console.warn(`[Lite-STEP] Refused pushed file '${filename}': only .py and .ifc are carried`);
+      ws.send(buildError(msg.id, "Only .py and .ifc files are accepted"));
+      return;
+    }
     if (msg.content) {
       this._handleInlineFile(ws, msg.id, filename, msg.content, msg.sizeBytes);
     } else {
@@ -413,13 +429,31 @@ export class LiteStepServer {
       console.log(
         `[Lite-STEP] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
       );
-      this.sendModelPairToClient(ws);
+      this._updateStatusBar();
+      // Protocol 1.2: a connection is not a request for the model. The one
+      // re-send is the batch whose /delete:all this client ran, asked for by
+      // id, once, within two minutes.
+      if (msg.wantsModel !== true) {
+        return;
+      }
+      const pair = this._outstanding.claim(msg.awaitingBatchId);
+      if (pair) {
+        this._sendModelPair(ws, pair);
+      } else {
+        console.warn(
+          `[Lite-STEP] Client asked for batch ${JSON.stringify(msg.awaitingBatchId)}, which is not in flight; nothing sent`
+        );
+      }
     }
   }
 
   private _handleText(ws: WebSocket, raw: string): void {
     try {
       const msg: ProtocolMessage = parseMessage(raw);
+      const status = msg.type === "status" ? msg.status : undefined;
+      if (!this._gate.accept(ws, msg.type, status)) {
+        return;
+      }
       switch (msg.type) {
         case "file.push":
         case "ifc.push":
@@ -439,6 +473,9 @@ export class LiteStepServer {
   }
 
   private _handleBinary(ws: WebSocket, data: Buffer): void {
+    if (!this._gate.accept(ws, null)) {
+      return;
+    }
     const state = this._incomingState.get(ws);
     if (!state) {
       console.warn(
@@ -469,20 +506,31 @@ export class LiteStepServer {
   }
 
   private _updateStatusBar(): void {
+    let text: string;
+    let tooltip: string;
     if (this._wss) {
       const count = this._clients.size;
       if (count > 0) {
-        this._statusBarItem.text = `$(check) Lite-STEP: ${count} client${count > 1 ? "s" : ""}`;
-        this._statusBarItem.tooltip = `Lite-STEP server running on port ${this._port} — ${count} connected`;
+        const origins = this._gate.webOrigins();
+        text = `$(check) Lite-STEP: ${count} client${count > 1 ? "s" : ""}`;
+        tooltip =
+          `Lite-STEP server running on port ${this._port} — ${count} connected` +
+          (origins.length > 0 ? ` (${origins.join(", ")})` : "");
       } else {
-        this._statusBarItem.text = `$(radio-tower) Lite-STEP: Listening`;
-        this._statusBarItem.tooltip = `Lite-STEP server listening on port ${this._port}`;
+        text = `$(radio-tower) Lite-STEP: Listening`;
+        tooltip = `Lite-STEP server listening on port ${this._port}`;
       }
     } else {
-      this._statusBarItem.text = `$(circle-slash) Lite-STEP: Off`;
-      this._statusBarItem.tooltip = "Lite-STEP server is not running";
+      text = `$(circle-slash) Lite-STEP: Off`;
+      tooltip = "Lite-STEP server is not running";
     }
-    this._statusBarItem.show();
-    this._onDidChangeStatus.fire();
+    this._host.showStatus(text, tooltip);
+    for (const listener of this._statusListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error(`[Lite-STEP] status listener failed: ${e}`);
+      }
+    }
   }
 }
