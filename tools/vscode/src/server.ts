@@ -3,20 +3,19 @@
  *
  * Runs on 127.0.0.1 (configurable port, default 9877).
  * Implements the file push/pull protocol:
- *   hello → file.push / ifc.push / ifc.pull / status / error / document.sync
+ *   hello → file.push / ifc.push / status / error
  *
  * Who may connect, and the strict handshake for web pages, live in
  * `origin-policy.ts` and `bridge-gate.ts`.
  */
 
-/** How long a `/delete:all` batch stays owed to the page that ran it. */
-const INFLIGHT_BATCH_MS = 120_000;
 
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import * as vscode from "vscode";
 import { ClientGate, makeVerifyClient, roleOf } from "./bridge-gate";
 import { allowedFile, parseAllowlist, type Allowlist } from "./origin-policy";
+import { OutstandingBatches, type ModelPair } from "./batches";
 import {
   buildHello,
   buildStatus,
@@ -42,8 +41,8 @@ export class LiteStepServer {
   private _onFileReceived: OnFileReceived | null = null;
   private readonly _gate = new ClientGate();
   private _allowlist: Allowlist = parseAllowlist([]);
-  /** The batch a `/delete:all` push is waiting to re-send, once, on request. */
-  private _inflightBatch: { id: string; at: number } | null = null;
+  /** `/delete:all` batches still owed to the pages that ran them (`batches.ts`). */
+  private readonly _outstanding = new OutstandingBatches();
 
   /** Per-client state for incoming binary frames */
   private readonly _incomingState: Map<
@@ -147,12 +146,6 @@ export class LiteStepServer {
   }
 
   /** Current active model pair (output.py and output.ifc) */
-  private _currentModel: {
-    pyContent: string;
-    pyFilename: string;
-    ifcContent: string;
-    ifcFilename: string;
-  } | null = null;
 
   /**
    * Push the Python model and its compiled IFC: send /delete:all, then
@@ -167,19 +160,16 @@ export class LiteStepServer {
     pyFilename: string = "output.py",
     ifcFilename: string = "output.ifc"
   ): boolean {
-    const batchId = `vsc-batch-${Date.now()}`;
-    if (this._readyClients().length === 0) {
+    const batchId = `vsc-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const recipients = this._readyClients();
+    if (recipients.length === 0) {
       console.log("[Lite-STEP] No clients connected; nothing pushed.");
       return false;
     }
-    this._currentModel = {
-      pyContent,
-      pyFilename,
-      ifcContent,
-      ifcFilename,
-    };
-
-    this._inflightBatch = { id: batchId, at: Date.now() };
+    for (const id of this._outstanding.dropExpired()) {
+      console.warn(`[Lite-STEP] Batch ${id} was not asked for within two minutes; dropped.`);
+    }
+    this._outstanding.add(batchId, { pyContent, pyFilename, ifcContent, ifcFilename }, recipients.length);
 
     console.log(`[Lite-STEP] Stored current model pair in server memory (batch: ${batchId}).`);
 
@@ -194,7 +184,7 @@ export class LiteStepServer {
       batchId,
     });
 
-    for (const ws of this._readyClients()) {
+    for (const ws of recipients) {
       try {
         ws.send(wipeMsg);
         console.log(`[Lite-STEP] Sent /delete:all wipe command to client.`);
@@ -205,14 +195,9 @@ export class LiteStepServer {
     return true;
   }
 
-  /** Send current stored model pair to a client */
-  sendModelPairToClient(ws: WebSocket): void {
-    if (!this._currentModel) {
-      console.log("[Lite-STEP] No stored model to send to client.");
-      return;
-    }
-
-    const { pyContent, pyFilename, ifcContent, ifcFilename } = this._currentModel;
+  /** Send a batch's model pair to a client */
+  private _sendModelPair(ws: WebSocket, pair: ModelPair): void {
+    const { pyContent, pyFilename, ifcContent, ifcFilename } = pair;
     const batchId = `vsc-pair-${Date.now()}`;
 
     try {
@@ -244,38 +229,6 @@ export class LiteStepServer {
     } catch (e) {
       console.error(`[Lite-STEP] Failed sending model pair to client: ${e}`);
     }
-  }
-
-  /** Send document.sync message to all connected clients */
-  broadcastDocumentSync(
-    documentId: "lite_step" | "ifc_step_file",
-    content: string,
-    contentType: "text/x-python" | "application/x-step",
-    fileName: string
-  ): void {
-    const id = `vsc-sync-${Date.now()}`;
-    const msg = JSON.stringify({
-      type: "document.sync",
-      version: "1.1",
-      id,
-      payload: {
-        documentId,
-        content,
-        contentType,
-        metadata: {
-          lastModified: Date.now(),
-          source: "vscode",
-          fileName,
-        },
-      },
-    });
-
-    this._broadcast(msg);
-  }
-
-  /** Send a document.sync text message to all clients */
-  sendTextSync(jsonMessage: string): void {
-    this._broadcast(jsonMessage);
   }
 
   dispose(): void {
@@ -458,14 +411,9 @@ export class LiteStepServer {
       if (msg.wantsModel !== true) {
         return;
       }
-      const inflight = this._inflightBatch;
-      if (
-        inflight &&
-        msg.awaitingBatchId === inflight.id &&
-        Date.now() - inflight.at <= INFLIGHT_BATCH_MS
-      ) {
-        this._inflightBatch = null;
-        this.sendModelPairToClient(ws);
+      const pair = this._outstanding.claim(msg.awaitingBatchId);
+      if (pair) {
+        this._sendModelPair(ws, pair);
       } else {
         console.warn(
           `[Lite-STEP] Client asked for batch ${JSON.stringify(msg.awaitingBatchId)}, which is not in flight; nothing sent`

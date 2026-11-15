@@ -181,48 +181,71 @@ class LiteStepServer:
     async def _handle_json_message(self, websocket, data: dict) -> None:
         msg_type = data.get("type")
         msg_id = data.get("id", "unknown")
-        
-        if msg_type in ("ifc.push", "file.push"):
-            filename = data.get("filename") or "import.ifc"
-            content = data.get("content")
-            blend_path = data.get("blendPath") or data.get("blend_path")
-            if getattr(websocket, "litestep_role", None) == WEB:
-                # A web page may not name a file on this disk for Blender to
-                # open, and may push IFC only.
-                blend_path = None
-                if not allowed_web_file(filename):
-                    logger.warning("Refused pushed file %r from a web page: only .ifc", filename)
-                    await websocket.send(build_error(msg_id, "Only .ifc files are accepted"))
-                    return
 
-            if content:
-                # Protocol 1.1: Inline text content
-                print(f"Lite-STEP: Received inline model '{filename}' ({len(content)} chars)")
-                if self.on_file_received:
-                    try:
-                        self.on_file_received(content.encode("utf-8"), filename, blend_path=blend_path)
-                        await websocket.send(build_status(msg_id, "loaded"))
-                        print(f"Lite-STEP: Sent status ack 'loaded' for {msg_id}")
-                    except Exception as e:
-                        print(f"Lite-STEP: Error loading received model: {e}")
-                        await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
-            else:
-                # Protocol 1.0: Expect binary payload frame next
-                self._incoming_state[websocket] = {
-                    "id": msg_id,
-                    "filename": filename,
-                    "blend_path": blend_path,
-                    "sizeBytes": data.get("sizeBytes", 0)
-                }
-                print(f"Lite-STEP: Prepared to receive binary IFC '{filename}' ({data.get('sizeBytes', 0)} bytes)")
-                logger.info(f"Prepared to receive IFC '{filename}' ({data.get('sizeBytes')} bytes)")
+        if msg_type in ("ifc.push", "file.push"):
+            await self._handle_push(websocket, data, msg_id)
         elif msg_type == "status":
             print(f"Lite-STEP: Received status update for {msg_id}: {data.get('status')}")
             logger.info(f"Received status update for {msg_id}: {data.get('status')}")
 
+    async def _refuse(self, websocket, msg_id, reason: str) -> None:
+        """Answer a refused push with an error, then close: a web page that
+        breaks the rules gets no second frame read, so a binary payload that
+        follows a refused header can never be loaded."""
+        logger.warning("Refused a push from a web page: %s", reason)
+        try:
+            await websocket.send(build_error(msg_id, reason))
+        finally:
+            await websocket.close(_POLICY_VIOLATION, "refused")
+
+    async def _handle_push(self, websocket, data: dict, msg_id) -> None:
+        filename = data.get("filename") or "import.ifc"
+        content = data.get("content")
+        blend_path = data.get("blendPath") or data.get("blend_path")
+        if getattr(websocket, "litestep_role", None) == WEB:
+            # A web page may not name a file on this disk for Blender to
+            # open, and may push IFC only.
+            blend_path = None
+            if not allowed_web_file(filename):
+                await self._refuse(websocket, msg_id, "Only .ifc files are accepted")
+                return
+
+        if content:
+            # Protocol 1.1: Inline text content
+            print(f"Lite-STEP: Received inline model '{filename}' ({len(content)} chars)")
+            await self._load(websocket, content.encode("utf-8"), filename, blend_path, msg_id)
+            return
+
+        # Protocol 1.0: Expect binary payload frame next
+        self._incoming_state[websocket] = {
+            "id": msg_id,
+            "filename": filename,
+            "blend_path": blend_path,
+            "sizeBytes": data.get("sizeBytes", 0)
+        }
+        print(f"Lite-STEP: Prepared to receive binary IFC '{filename}' ({data.get('sizeBytes', 0)} bytes)")
+        logger.info(f"Prepared to receive IFC '{filename}' ({data.get('sizeBytes')} bytes)")
+
+    async def _load(self, websocket, payload: bytes, filename: str, blend_path, msg_id) -> None:
+        if not self.on_file_received:
+            return
+        try:
+            self.on_file_received(payload, filename, blend_path=blend_path)
+            await websocket.send(build_status(msg_id, "loaded"))
+            print(f"Lite-STEP: Sent status ack 'loaded' for {msg_id}")
+        except Exception as e:
+            print(f"Lite-STEP: Error loading received model: {e}")
+            logger.exception("Error loading received model")
+            await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
+
     async def _handle_binary_message(self, websocket, msg: bytes) -> None:
         state = self._incoming_state.pop(websocket, None)
         if not state:
+            if getattr(websocket, "litestep_role", None) == WEB:
+                # A web page must announce a binary frame with a header that
+                # passed the checks above; a bare one is not loaded.
+                await self._refuse(websocket, None, "A binary frame needs an ifc.push header first")
+                return
             filename = "output.ifc"
             msg_id = "binary-push"
             blend_path = None
@@ -234,15 +257,7 @@ class LiteStepServer:
             print(f"Lite-STEP: Received binary frame for '{filename}', size: {len(msg)} bytes.")
             logger.info(f"Received binary frame for '{filename}', size: {len(msg)} bytes.")
 
-        if self.on_file_received:
-            try:
-                self.on_file_received(msg, filename, blend_path=blend_path)
-                await websocket.send(build_status(msg_id, "loaded"))
-                print(f"Lite-STEP: Sent status ack 'loaded' for {msg_id}")
-            except Exception as e:
-                print(f"Lite-STEP: Error processing received IFC: {e}")
-                logger.exception("Error processing received IFC")
-                await websocket.send(build_error(msg_id, f"Load failed: {str(e)}"))
+        await self._load(websocket, msg, filename, blend_path, msg_id)
 
     def send_ifc_to_clients(self, ifc_bytes: bytes, filename: str) -> None:
         """Send an IFC file to all connected clients."""

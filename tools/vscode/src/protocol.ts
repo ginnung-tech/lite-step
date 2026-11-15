@@ -1,7 +1,8 @@
 /**
  * Wire protocol types and builders for the Lite-STEP WebSocket bridge.
  *
- * Exposes two-way file push/pull and document sync protocol:
+ * Two-way file push. A push is a user action (protocol 1.2): nothing is sent
+ * because a file was saved or a page connected.
  * - VS Code → Client: Pushes raw .py or .ifc file.
  * - Client → VS Code: Pushes raw .py or .ifc file (opened as new unsaved document in VS Code).
  */
@@ -48,28 +49,11 @@ export interface ErrorMessage {
   message: string;
 }
 
-export interface DocumentSyncMessage {
-  type: "document.sync";
-  version: string;
-  id: string;
-  payload: {
-    documentId: "lite_step" | "ifc_step_file";
-    content: string;
-    contentType: "text/x-python" | "application/x-step";
-    metadata: {
-      lastModified: number;
-      source: string;
-      fileName: string;
-    };
-  };
-}
-
 export type ProtocolMessage =
   | HelloMessage
   | PushMessage
   | StatusMessage
-  | ErrorMessage
-  | DocumentSyncMessage;
+  | ErrorMessage;
 
 const PROTOCOL_VERSION = "1.3";
 
@@ -82,7 +66,7 @@ export function buildHello(): string {
   const msg: HelloMessage = {
     type: "hello",
     version: PROTOCOL_VERSION,
-    capabilities: ["file.push", "ifc.push", "document.sync"],
+    capabilities: ["file.push", "ifc.push"],
     source: "vscode",
   };
   return JSON.stringify(msg);
@@ -137,30 +121,6 @@ export function buildError(id: string | null, message: string): string {
     version: PROTOCOL_VERSION,
     id,
     message,
-  };
-  return JSON.stringify(msg);
-}
-
-export function buildDocumentSync(
-  fileName: string,
-  content: string,
-  isIfc: boolean
-): string {
-  const id = nextId();
-  const msg: DocumentSyncMessage = {
-    type: "document.sync",
-    version: PROTOCOL_VERSION,
-    id,
-    payload: {
-      documentId: isIfc ? "ifc_step_file" : "lite_step",
-      content,
-      contentType: isIfc ? "application/x-step" : "text/x-python",
-      metadata: {
-        lastModified: Date.now(),
-        source: "vscode",
-        fileName,
-      },
-    },
   };
   return JSON.stringify(msg);
 }

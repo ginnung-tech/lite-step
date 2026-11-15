@@ -57,14 +57,18 @@ jobs:
           echo "version=$vsix" >> "$GITHUB_OUTPUT"
 
       - name: Test the connection rules (Blender add-on)
+        # Wheels only, pinned by hash. The test loads the add-on's modules
+        # directly and needs neither lite_step's dependencies nor its conftest.
         run: |
-          pip install -e . pytest websockets
-          python -m pytest lite_step/tests/test_tools_blender_bridge.py -q
+          pip install --only-binary :all: --require-hashes -r tools/requirements-test.txt
+          python -m pytest lite_step/tests/test_tools_blender_bridge.py -q --noconftest -p no:cacheprovider
 
       - name: Test the connection rules (VS Code extension)
         working-directory: tools/vscode
+        # --ignore-scripts: no dependency's install script runs. esbuild
+        # needs none; its binary comes from a platform package.
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run lint
           npm test
 
@@ -87,7 +91,9 @@ jobs:
           path: dist/*
 
       - name: Publish the release
-        if: github.ref_type == 'tag'
+        # A tag push publishes. A manual run publishes only from a tag and
+        # only with dry_run turned off.
+        if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.dry_run == false)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

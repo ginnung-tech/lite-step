@@ -15,7 +15,6 @@ import * as path from "node:path";
 import { LiteStepServer } from "./server";
 import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
 import { isLiteStepFile, clearCache } from "./detection";
-import { buildDocumentSync } from "./protocol";
 import { PreviewPanel } from "./preview-panel";
 import { pushIfcToBlender } from "./blender-client";
 import { LiteStepCodeLensProvider } from "./providers/codelens";
@@ -185,30 +184,6 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.languages.registerHoverProvider({ language: "python" }, hoverProvider),
     vscode.window.registerFileDecorationProvider(decorationProvider),
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (!server.isRunning || server.clientCount === 0) {
-        return;
-      }
-      const fsPath = doc.uri.fsPath.toLowerCase();
-      if (fsPath.endsWith(".ifc")) {
-        const syncMsg = buildDocumentSync(
-          path.basename(doc.uri.fsPath),
-          doc.getText(),
-          true
-        );
-        server.sendTextSync(syncMsg);
-      } else if (
-        fsPath.endsWith(".py") &&
-        isLiteStepFile(doc.getText(), doc.uri.fsPath)
-      ) {
-        const syncMsg = buildDocumentSync(
-          path.basename(doc.uri.fsPath),
-          doc.getText(),
-          false
-        );
-        server.sendTextSync(syncMsg);
-      }
-    }),
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document.languageId === "python") {
         clearCache();

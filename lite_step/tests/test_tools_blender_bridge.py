@@ -234,6 +234,39 @@ def test_a_web_page_after_the_handshake_loads_ifc_but_never_names_a_blend_file(r
     assert loaded == [("model.ifc", None)]
 
 
+def test_a_refused_header_closes_the_connection_so_its_binary_payload_never_loads(running):
+    _, port, loaded = running
+
+    async def go():
+        async with websockets.connect(f"ws://127.0.0.1:{port}", origin="https://ginnung.tech") as ws:
+            await ws.recv()
+            await ws.send(json.dumps(CONNECTED))
+            await ws.send(json.dumps({"type": "ifc.push", "id": "b1", "filename": "output.py", "sizeBytes": 3}))
+            assert json.loads(await ws.recv())["type"] == "error"
+            with pytest.raises(websockets.exceptions.ConnectionClosed):
+                await ws.send(b"x=1")
+                await ws.recv()
+
+    _run(go())
+    assert loaded == []
+
+
+def test_a_bare_binary_frame_from_a_web_page_is_not_loaded(running):
+    _, port, loaded = running
+
+    async def go():
+        async with websockets.connect(f"ws://127.0.0.1:{port}", origin="https://ginnung.tech") as ws:
+            await ws.recv()
+            await ws.send(json.dumps(CONNECTED))
+            await ws.send(b"ISO-10303-21;")
+            assert json.loads(await ws.recv())["type"] == "error"
+            with pytest.raises(websockets.exceptions.ConnectionClosed):
+                await ws.recv()
+
+    _run(go())
+    assert loaded == []
+
+
 def test_a_local_program_needs_no_handshake_and_may_name_a_blend_file(running):
     _, port, loaded = running
 

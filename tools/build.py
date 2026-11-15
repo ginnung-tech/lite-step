@@ -50,9 +50,11 @@ def build_vscode():
     print("  Running npm run build...")
     subprocess.run([npm_cmd, "run", "build"], cwd=VSCODE_DIR, check=True)
 
+    # The vsce pinned in package.json's devDependencies, never a download:
+    # --no-install fails rather than fetch whatever version is newest.
     print("  Packaging extension with vsce...")
     subprocess.run(
-        [npx_cmd, "-y", "@vscode/vsce", "package", "--no-dependencies"],
+        [npx_cmd, "--no-install", "vsce", "package", "--no-dependencies"],
         cwd=VSCODE_DIR,
         check=True,
     )

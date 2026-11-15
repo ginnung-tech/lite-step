@@ -109,8 +109,12 @@ export function checkUpgrade(
  */
 export function allowedFile(filename: string, fileType?: string): boolean {
   const lower = filename.toLowerCase();
-  const kind = lower.endsWith(".py") ? "python" : lower.endsWith(".ifc") ? "ifc" : null;
-  if (kind === null) {
+  let kind: "python" | "ifc";
+  if (lower.endsWith(".py")) {
+    kind = "python";
+  } else if (lower.endsWith(".ifc")) {
+    kind = "ifc";
+  } else {
     return false;
   }
   return fileType === undefined || fileType === kind;
