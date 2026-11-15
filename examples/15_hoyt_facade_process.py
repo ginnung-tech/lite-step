@@ -22,15 +22,21 @@ with their creative intent:
      - **Step 1 (`step1_block`):** Raw concrete stock block.
      - **Step 2 (`step2_rect_to_oval_tube`):** Un-rotated prototype 3D form
        (stretched rectangle-to-oval tube).
-     - **Step 3 (`step3_rotated_tube_left/right`):** Two copies rotated in the
-       horizontal (XY) plane—never sheared—meeting oval-to-oval at the peak.
+     - **Step 3 (`step3_rotated_tube_left/right`):** The two halves, turned
+       in the horizontal (XY) plane onto their cut planes. They are FITTED to
+       the cut, not rigid copies of Step 2: each section drifts sideways by
+       about 0.7 m along its axis, the right tube is shorter (5.6 m against
+       7.95 m), and the two oval ends overlap past the peak (they end near
+       x = 3.4 m and x = 5.7 m; the peak is at x = 4.34 m) instead of meeting
+       on it. Step 8 is carved by the analytic cutters (Step 6), not by these
+       tubes, so the fit shows the idea without driving the result.
      - **Step 4 (`step4_tube_*` + `step4_block`):** Extended 10 m along the
        linear morph (revealing the concave 4-lobed "flower" cross-section) with
        a transparent red block to verify internal alignment.
      - **Step 5 (`step5_*`):** Inverted transparency (solid concrete block +
        transparent red extended tubes) to inspect the cut from the outside.
-     - **Step 6 (`step6_cutters`):** Exact cutting wedges used for the boolean.
-     - **Step 7 (`step7_block_and_cutters`):** Block + cutting wedges overlaid.
+     - **Step 6 (`step6_cutter_left/right`):** Exact cutting wedges used for the boolean.
+     - **Step 7 (`step7_block` + `step7_cutter_*`):** Block + cutting wedges overlaid.
      - **Step 8 (`step8_block_minus_cutters`):** Final carved precast facade
        with punched openings, thin black frames, and tinted blue glazing.
    - Wrap each half and block in its own ``IfcBuildingElementProxy`` with
@@ -67,9 +73,11 @@ I = lambda x: int(round(x))  # noqa: E731,E741
 # ── Datums & Dimensions (all int mm, Z-up) ────────────────────────────────────
 CONCRETE_MAT = "Concrete_C30-37"
 
-# Tower structural floor plate (10 bays E-W x 18 bays N-S @ 3500 mm)
-TOWER_W_X = param(35000, "mm", "Tower floor plate width (E-W)")
-TOWER_L_Y = param(63000, "mm", "Tower floor plate length (N-S)")
+# Tower structural floor plate (10 bays E-W x 18 bays N-S @ 3500 mm). Not
+# param(): GRID_X / GRID_Y below are fixed, so a different plate size would
+# leave columns outside the slab.
+TOWER_W_X = 35000
+TOWER_L_Y = 63000
 HALF_X = TOWER_W_X // 2   # 17500
 HALF_Y = TOWER_L_Y // 2   # 31500
 
@@ -377,8 +385,8 @@ def _add_facade_step_showcase(storey):
     s2.placement = Transform(origin=Point(x=step_x[1], y=y_pos, z=0), rotations=[])
     storey.add(s2)
 
-    # Step 3: Two copies rotated in the horizontal plane (perpendicular slices, not sheared)
-    # placed with carve="none" so left and right halves are independently selectable
+    # Step 3: The two halves turned onto their cut planes, fitted to the cut (see the
+    # module docstring: not rigid copies of Step 2), carve="none" so each is selectable
     for side in ("left", "right"):
         s3 = Element(ifc_class="IfcBuildingElementProxy", name=f"step3_rotated_tube_{side}")
         s3.add(_build_rotated_rect_to_oval_tube_mesh(side))
@@ -396,20 +404,24 @@ def _add_facade_step_showcase(storey):
         storey, "step5", step_x[4], y_pos, tube_color=CUTTER_COLOR, block_color=PRECAST_COLOR
     )
 
-    # Step 6: Analytic cutting wedges matching the exact s^1.2 inward oval press
-    s6 = Element(ifc_class="IfcBuildingElementProxy", name="step6_cutters")
-    s6.add(_build_rect_to_oval_cutter_mesh("left"))
-    s6.add(_build_rect_to_oval_cutter_mesh("right"))
-    s6.placement = Transform(origin=Point(x=step_x[5], y=y_pos, z=0), rotations=[])
-    storey.add(s6)
+    # Step 6: Analytic cutting wedges matching the exact s^1.2 inward oval press,
+    # one product per wedge so each can be selected and hidden on its own
+    for side in ("left", "right"):
+        s6 = Element(ifc_class="IfcBuildingElementProxy", name=f"step6_cutter_{side}")
+        s6.add(_build_rect_to_oval_cutter_mesh(side))
+        s6.placement = Transform(origin=Point(x=step_x[5], y=y_pos, z=0), rotations=[])
+        storey.add(s6, carve="none")
 
-    # Step 7: Concrete block + analytic cutting wedges overlaid together (carve="none")
-    s7 = Element(ifc_class="IfcBuildingElementProxy", name="step7_block_and_cutters")
-    s7.add(Box(name="body", start=Point(x=0, y=-FACADE_D, z=0), end=Point(x=FACADE_W, y=0, z=FACADE_H3), material=CONCRETE_MAT, color=PRECAST_COLOR), carve="none")
-    s7.add(_build_rect_to_oval_cutter_mesh("left"), carve="none")
-    s7.add(_build_rect_to_oval_cutter_mesh("right"), carve="none")
+    # Step 7: Concrete block + analytic cutting wedges overlaid (carve="none"), three products
+    s7 = Element(ifc_class="IfcBuildingElementProxy", name="step7_block")
+    s7.add(Box(name="body", start=Point(x=0, y=-FACADE_D, z=0), end=Point(x=FACADE_W, y=0, z=FACADE_H3), material=CONCRETE_MAT, color=PRECAST_COLOR))
     s7.placement = Transform(origin=Point(x=step_x[6], y=y_pos, z=0), rotations=[])
-    storey.add(s7)
+    storey.add(s7, carve="none")
+    for side in ("left", "right"):
+        c7 = Element(ifc_class="IfcBuildingElementProxy", name=f"step7_cutter_{side}")
+        c7.add(_build_rect_to_oval_cutter_mesh(side))
+        c7.placement = Transform(origin=Point(x=step_x[6], y=y_pos, z=0), rotations=[])
+        storey.add(c7, carve="none")
 
     # Step 8: Final sculpted 3-module precast panel with 6 punched windows, black frames, and blue glass
     s8 = Element(ifc_class="IfcBuildingElementProxy", name="step8_block_minus_cutters")
@@ -486,7 +498,13 @@ def _build_free_rect_to_oval_tube_mesh():
 
 
 def _build_rotated_rect_to_oval_tube_mesh(side, extend_mm=0, color=PRECAST_COLOR):
-    """Build a true rotated rectangle->oval tube aligned to the left or right cut plane."""
+    """Build the left or right rectangle->oval tube turned onto its cut plane.
+
+    Fitted, not rigid: ``w_off`` moves the section sideways along the axis and
+    the two halves have their own lengths, so the cut surface error stays near
+    10 mm. The two oval ends overlap past ``FACADE_X_PEAK`` rather than meeting
+    on it (see the module docstring).
+    """
     if side == "left":
         p0 = (-600.0, -float(FACADE_BASE_T) + 140.0)
     else:
