@@ -149,6 +149,37 @@ export function activate(context: vscode.ExtensionContext) {
       }
     ),
     vscode.commands.registerCommand(
+      "litestep.pushToWebNewProject",
+      async (uri?: vscode.Uri) => {
+        if (!server.isRunning) {
+          vscode.window.showWarningMessage("Start the Lite-STEP server first");
+          return;
+        }
+        const filePath = resolveTargetFile(uri);
+        if (!filePath) {
+          vscode.window.showWarningMessage(
+            "No .py or .ifc file selected (or output.py / output.ifc found)"
+          );
+          return;
+        }
+        const name = await vscode.window.showInputBox({
+          title: "Push as New Project",
+          prompt: "Name of the new Ginnung project",
+          value: defaultProjectName(filePath),
+          validateInput: (v) => {
+            const t = v.trim();
+            if (t.length === 0) return "A project needs a name";
+            if (t.length > 80) return "At most 80 characters";
+            return null;
+          },
+        });
+        if (name === undefined) {
+          return;
+        }
+        await pushFileToWeb(filePath, name.trim());
+      }
+    ),
+    vscode.commands.registerCommand(
       "litestep.pushToBlender",
       async (uri?: vscode.Uri) => {
         const filePath = resolveTargetFile(uri);
@@ -292,7 +323,40 @@ async function previewFile(
   }
 }
 
-async function pushFileToWeb(filePath: string): Promise<void> {
+/** The folder's name, or the script's when it is generic (output.py). */
+function defaultProjectName(filePath: string): string {
+  const stem = path.basename(filePath, path.extname(filePath));
+  return stem === "output" ? path.basename(path.dirname(filePath)) : stem;
+}
+
+/**
+ * Send the model to the connected Ginnung page(s): replacing the current
+ * project's model, or, with `newProjectName`, into a new project.
+ */
+function sendToWeb(pyContent: string, ifcContent: string, newProjectName?: string): void {
+  if (newProjectName === undefined) {
+    if (!server.pushModel(pyContent, ifcContent, "output.py", "output.ifc")) {
+      vscode.window.showWarningMessage(NOT_CONNECTED);
+      return;
+    }
+    vscode.window.showInformationMessage("Lite-STEP: sent 'output.py' and 'output.ifc' to Ginnung.");
+    return;
+  }
+  const result = server.pushAsNewProject(pyContent, ifcContent, newProjectName, "output.py", "output.ifc");
+  if (result === "not-connected") {
+    vscode.window.showWarningMessage(NOT_CONNECTED);
+  } else if (result === "unsupported") {
+    vscode.window.showWarningMessage(
+      "Lite-STEP: the connected Ginnung page cannot open projects. Update the page (reload it), or use Push Model to Web to replace the current project's model."
+    );
+  } else {
+    vscode.window.showInformationMessage(
+      `Lite-STEP: asked Ginnung to open project '${newProjectName}'; the model follows when it has loaded.`
+    );
+  }
+}
+
+async function pushFileToWeb(filePath: string, newProjectName?: string): Promise<void> {
   const ext = path.extname(filePath).toLowerCase();
   const baseName = path.basename(filePath);
 
@@ -314,15 +378,7 @@ async function pushFileToWeb(filePath: string): Promise<void> {
 
         const pyContent = fs.readFileSync(filePath, "utf-8");
         const ifcContent = fs.readFileSync(compResult.ifcPath, "utf-8");
-
-        if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
-          vscode.window.showWarningMessage(NOT_CONNECTED);
-          return;
-        }
-
-        vscode.window.showInformationMessage(
-          `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
-        );
+        sendToWeb(pyContent, ifcContent, newProjectName);
       }
     );
   }
@@ -342,14 +398,7 @@ async function pushFileToWeb(filePath: string): Promise<void> {
       pyContent = fs.readFileSync(workspacePy, "utf-8");
     }
 
-    if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
-      vscode.window.showWarningMessage(NOT_CONNECTED);
-      return;
-    }
-
-    vscode.window.showInformationMessage(
-      `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
-    );
+    sendToWeb(pyContent, ifcContent, newProjectName);
   }
 }
 

@@ -45,6 +45,12 @@
         "category": "Lite-STEP"
       },
       {
+        "command": "litestep.pushToWebNewProject",
+        "title": "Push Model to Web as New Project",
+        "icon": "$(new-folder)",
+        "category": "Lite-STEP"
+      },
+      {
         "command": "litestep.pushToBlender",
         "title": "Push Model to Blender",
         "icon": "$(symbol-misc)",
@@ -107,6 +113,11 @@
         },
         {
           "command": "litestep.pushToWeb",
+          "when": "resourceExtname == .py || resourceExtname == .ifc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "litestep.pushToWebNewProject",
           "when": "resourceExtname == .py || resourceExtname == .ifc",
           "group": "navigation@2"
         },
