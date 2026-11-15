@@ -12,7 +12,6 @@
 
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
-import * as vscode from "vscode";
 import { ClientGate, makeVerifyClient, roleOf } from "./bridge-gate";
 import { allowedFile, parseAllowlist, type Allowlist } from "./origin-policy";
 import { OutstandingBatches, type ModelPair } from "./batches";
@@ -34,6 +33,24 @@ export interface IncomingFile {
 
 export type OnFileReceived = (file: IncomingFile) => void;
 
+/**
+ * What the server needs from whatever runs it: VS Code (`vscode-host.ts`) or
+ * the headless `bridge-cli.ts` the cross-service e2e test starts. Keeping
+ * `vscode` out of this file is what lets that test run the real server.
+ */
+export interface ServerHost {
+  /** The user's extra allowed web origins (`litestep.allowedOrigins`). */
+  allowedOrigins(): readonly unknown[];
+  warn(message: string): void;
+  error(message: string): void;
+  /** Show the server's state (the status bar in VS Code). */
+  showStatus(text: string, tooltip: string): void;
+}
+
+export interface Disposable {
+  dispose(): void;
+}
+
 export class LiteStepServer {
   private _wss: WebSocketServer | null = null;
   private readonly _clients: Set<WebSocket> = new Set();
@@ -50,14 +67,19 @@ export class LiteStepServer {
     { id: string; filename: string; sizeBytes: number }
   > = new Map();
 
-  private readonly _statusBarItem: vscode.StatusBarItem;
+  private readonly _host: ServerHost;
   private readonly _heartbeatIntervals: Map<WebSocket, ReturnType<typeof setInterval>> =
     new Map();
-  private readonly _onDidChangeStatus = new vscode.EventEmitter<void>();
-  public readonly onDidChangeStatus = this._onDidChangeStatus.event;
+  private readonly _statusListeners = new Set<() => void>();
 
-  constructor(statusBarItem: vscode.StatusBarItem, port: number = 9877) {
-    this._statusBarItem = statusBarItem;
+  /** Called whenever the server starts, stops, or a client comes or goes. */
+  onDidChangeStatus(listener: () => void): Disposable {
+    this._statusListeners.add(listener);
+    return { dispose: () => this._statusListeners.delete(listener) };
+  }
+
+  constructor(host: ServerHost, port: number = 9877) {
+    this._host = host;
     this._port = port;
     this._updateStatusBar();
   }
@@ -87,11 +109,10 @@ export class LiteStepServer {
       this._port = port;
     }
 
-    const config = vscode.workspace.getConfiguration("litestep");
-    this._allowlist = parseAllowlist(config.get<unknown[]>("allowedOrigins", []));
+    this._allowlist = parseAllowlist(this._host.allowedOrigins());
     const ignored = this._allowlist.rejected;
     if (ignored.length > 0) {
-      vscode.window.showWarningMessage(
+      this._host.warn(
         `Lite-STEP: ignored ${ignored.length} entr${ignored.length === 1 ? "y" : "ies"} in litestep.allowedOrigins. ${ignored.join("; ")}`
       );
     }
@@ -106,9 +127,7 @@ export class LiteStepServer {
     this._wss.on("connection", (ws, req) => this._handleConnection(ws, req));
 
     this._wss.on("error", (err) => {
-      vscode.window.showErrorMessage(
-        `Lite-STEP server error: ${err.message}`
-      );
+      this._host.error(`Lite-STEP server error: ${err.message}`);
     });
 
     this._wss.on("listening", () => {
@@ -481,23 +500,31 @@ export class LiteStepServer {
   }
 
   private _updateStatusBar(): void {
+    let text: string;
+    let tooltip: string;
     if (this._wss) {
       const count = this._clients.size;
       if (count > 0) {
-        this._statusBarItem.text = `$(check) Lite-STEP: ${count} client${count > 1 ? "s" : ""}`;
         const origins = this._gate.webOrigins();
-        this._statusBarItem.tooltip =
+        text = `$(check) Lite-STEP: ${count} client${count > 1 ? "s" : ""}`;
+        tooltip =
           `Lite-STEP server running on port ${this._port} — ${count} connected` +
           (origins.length > 0 ? ` (${origins.join(", ")})` : "");
       } else {
-        this._statusBarItem.text = `$(radio-tower) Lite-STEP: Listening`;
-        this._statusBarItem.tooltip = `Lite-STEP server listening on port ${this._port}`;
+        text = `$(radio-tower) Lite-STEP: Listening`;
+        tooltip = `Lite-STEP server listening on port ${this._port}`;
       }
     } else {
-      this._statusBarItem.text = `$(circle-slash) Lite-STEP: Off`;
-      this._statusBarItem.tooltip = "Lite-STEP server is not running";
+      text = `$(circle-slash) Lite-STEP: Off`;
+      tooltip = "Lite-STEP server is not running";
     }
-    this._statusBarItem.show();
-    this._onDidChangeStatus.fire();
+    this._host.showStatus(text, tooltip);
+    for (const listener of this._statusListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error(`[Lite-STEP] status listener failed: ${e}`);
+      }
+    }
   }
 }

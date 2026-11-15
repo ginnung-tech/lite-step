@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { LiteStepServer } from "./server";
+import { vscodeHost } from "./vscode-host";
 import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
 import { isLiteStepFile, clearCache } from "./detection";
 import { PreviewPanel } from "./preview-panel";
@@ -43,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Server
   const config = vscode.workspace.getConfiguration("litestep");
   const port = config.get<number>("port", 9877);
-  server = new LiteStepServer(statusBarItem, port);
+  server = new LiteStepServer(vscodeHost(statusBarItem), port);
 
   // Handle incoming files pushed from web app → save in workspace root under litestep-<timestamp>
   server.onFileReceived = (file) => {

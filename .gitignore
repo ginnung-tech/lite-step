@@ -30,3 +30,4 @@ tools/blender/*.zip
 tools/*.zip
 
 tools/vscode/out-test/
+tools/vscode/out-cli/

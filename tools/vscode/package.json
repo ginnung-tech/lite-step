@@ -184,7 +184,8 @@
     "watch": "node esbuild.config.mjs --watch",
     "package": "vsce package --no-dependencies",
     "lint": "tsc --noEmit",
-    "test": "esbuild test/*.test.ts --bundle --platform=node --format=cjs --outdir=out-test --log-level=warning && node --test --test-force-exit \"out-test/*.js\""
+    "build:cli": "esbuild src/bridge-cli.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out-cli/bridge-cli.js --log-level=warning",
+    "test": "npm run build:cli && esbuild test/*.test.ts --bundle --platform=node --format=cjs --outdir=out-test --log-level=warning && node --test --test-force-exit \"out-test/*.js\""
   },
   "dependencies": {
     "ws": "^8.16.0"

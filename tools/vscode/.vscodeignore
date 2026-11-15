@@ -6,3 +6,4 @@ esbuild.config.mjs
 *.map
 out-test/**
 test/**
+out-cli/**
