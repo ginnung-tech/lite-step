@@ -4,3 +4,5 @@ node_modules/**
 tsconfig.json
 esbuild.config.mjs
 *.map
+out-test/**
+test/**

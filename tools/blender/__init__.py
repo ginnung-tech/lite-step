@@ -2,7 +2,7 @@ bl_info = {
     "name": "Lite-STEP Bridge",
     "description": "Bridge Lite-STEP models to Blender via WebSocket and IFC (requires Bonsai)",
     "author": "Lite-STEP Contributors",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (5, 0, 0),
     "location": "View3D > N-Panel > Lite-STEP",
     "warning": "Requires Bonsai (formerly BlenderBIM) add-on for IFC import/export",
@@ -25,8 +25,10 @@ def register():
         prefs = preferences.get_preferences()
         if prefs and prefs.auto_start:
             from .bridge import load_ifc
+            from .origin_policy import split_entries
             server_instance.on_file_received = load_ifc
-            server_instance.start(port=prefs.port, version="1.1")
+            server_instance.start(port=prefs.port, version="1.3",
+                                  allowed_origins=split_entries(prefs.allowed_origins))
     except Exception as e:
         print(f"Lite-STEP: Failed to auto-start server - {e}")
 

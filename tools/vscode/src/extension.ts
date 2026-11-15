@@ -230,6 +230,10 @@ export function deactivate() {
 
 // ── Helpers ────────────────────────────────────────────────
 
+/** Shown when Push finds no page connected: nothing is queued (protocol 1.2). */
+const NOT_CONNECTED =
+  "Lite-STEP: no web app is connected, so nothing was pushed. Open the web app, choose VS Code in its connection menu, then push again.";
+
 function getWorkspaceRoot(): string {
   if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
     return vscode.workspace.workspaceFolders[0].uri.fsPath;
@@ -335,7 +339,10 @@ async function pushFileToWeb(filePath: string): Promise<void> {
         const pyContent = fs.readFileSync(filePath, "utf-8");
         const ifcContent = fs.readFileSync(compResult.ifcPath, "utf-8");
 
-        server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
+        if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
+          vscode.window.showWarningMessage(NOT_CONNECTED);
+          return;
+        }
 
         vscode.window.showInformationMessage(
           `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`
@@ -359,7 +366,10 @@ async function pushFileToWeb(filePath: string): Promise<void> {
       pyContent = fs.readFileSync(workspacePy, "utf-8");
     }
 
-    server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc");
+    if (!server.pushModelWithWipe(pyContent, ifcContent, "output.py", "output.ifc")) {
+      vscode.window.showWarningMessage(NOT_CONNECTED);
+      return;
+    }
 
     vscode.window.showInformationMessage(
       `Lite-STEP: Sent /delete:all to Web App. Pushing 'output.py' & 'output.ifc' upon reconnect.`

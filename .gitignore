@@ -29,3 +29,4 @@ tools/blender/__pycache__/
 tools/blender/*.zip
 tools/*.zip
 
+tools/vscode/out-test/

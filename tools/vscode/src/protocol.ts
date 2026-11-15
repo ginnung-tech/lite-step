@@ -35,6 +35,10 @@ export interface StatusMessage {
   status: string;
   direction?: string;
   capabilities?: string[];
+  /** 1.2: true only when the client is owed the batch named below. */
+  wantsModel?: boolean;
+  /** 1.2: the `batchId` of the push whose `/delete:all` the client ran. */
+  awaitingBatchId?: string;
 }
 
 export interface ErrorMessage {
@@ -67,7 +71,7 @@ export type ProtocolMessage =
   | ErrorMessage
   | DocumentSyncMessage;
 
-const PROTOCOL_VERSION = "1.1";
+const PROTOCOL_VERSION = "1.3";
 
 let _counter = 0;
 function nextId(): string {
