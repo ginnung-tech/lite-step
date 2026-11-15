@@ -46,7 +46,10 @@ export interface ErrorMessage {
   type: "error";
   version: string;
   id: string | null;
-  message: string;
+  /** What the Ginnung page sends (local-bridge 1.4). */
+  error?: string;
+  /** What older tools sent. */
+  message?: string;
 }
 
 export type ProtocolMessage =
@@ -55,7 +58,7 @@ export type ProtocolMessage =
   | StatusMessage
   | ErrorMessage;
 
-const PROTOCOL_VERSION = "1.3";
+const PROTOCOL_VERSION = "1.4";
 
 let _counter = 0;
 function nextId(): string {

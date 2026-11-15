@@ -60,6 +60,8 @@ export class LiteStepServer {
   private _allowlist: Allowlist = parseAllowlist([]);
   /** `/delete:all` batches still owed to the pages that ran them (`batches.ts`). */
   private readonly _outstanding = new OutstandingBatches();
+  /** What each page said it can do, from its `status: "connected"`. */
+  private readonly _capabilities = new Map<WebSocket, string[]>();
 
   /** Per-client state for incoming binary frames */
   private readonly _incomingState: Map<
@@ -166,69 +168,102 @@ export class LiteStepServer {
 
   /** Current active model pair (output.py and output.ifc) */
 
+  /** The command a page runs to open a new project (local-bridge 1.4). */
+  static readonly NEW_PROJECT_COMMAND = "/new:project";
+
+  private _newBatchId(): string {
+    return `vsc-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
   /**
-   * Push the Python model and its compiled IFC: send /delete:all, then
-   * re-send the pair when the reloaded page asks for this batch by id.
-   *
-   * Returns false, and keeps nothing, when no client is connected: a push is
-   * a user action that either reaches a page now or fails (protocol 1.2).
+   * Push: the pair, no command, to every connected page (local-bridge 1.4).
+   * Each page replaces its current project's model with it. Returns false,
+   * and sends nothing, when no page is connected: a push is a user action
+   * that reaches a page now or fails.
    */
-  pushModelWithWipe(
+  pushModel(
     pyContent: string,
     ifcContent: string,
     pyFilename: string = "output.py",
     ifcFilename: string = "output.ifc"
   ): boolean {
-    const batchId = `vsc-batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const recipients = this._readyClients();
     if (recipients.length === 0) {
       console.log("[Lite-STEP] No clients connected; nothing pushed.");
       return false;
     }
+    const pair: ModelPair = { pyContent, pyFilename, ifcContent, ifcFilename };
+    const batchId = this._newBatchId();
+    for (const ws of recipients) {
+      this._sendModelPair(ws, pair, batchId);
+    }
+    console.log(`[Lite-STEP] Pushed '${pyFilename}' and '${ifcFilename}' to ${recipients.length} page(s) (batch ${batchId}).`);
+    return true;
+  }
+
+  /**
+   * Push as New Project: ask each connected page that can to open a new
+   * project named `projectName`; the pair follows when the new project's
+   * page asks for this batch by id (local-bridge 1.4).
+   *
+   * `"not-connected"`: no page at all. `"unsupported"`: pages are connected,
+   * but none advertised `new:project`.
+   */
+  pushAsNewProject(
+    pyContent: string,
+    ifcContent: string,
+    projectName: string,
+    pyFilename: string = "output.py",
+    ifcFilename: string = "output.ifc"
+  ): "sent" | "not-connected" | "unsupported" {
+    const ready = this._readyClients();
+    if (ready.length === 0) {
+      return "not-connected";
+    }
+    const recipients = ready.filter((ws) => (this._capabilities.get(ws) ?? []).includes("new:project"));
+    if (recipients.length === 0) {
+      return "unsupported";
+    }
     for (const id of this._outstanding.dropExpired()) {
       console.warn(`[Lite-STEP] Batch ${id} was not asked for within two minutes; dropped.`);
     }
+    const batchId = this._newBatchId();
     this._outstanding.add(batchId, { pyContent, pyFilename, ifcContent, ifcFilename }, recipients.length);
-
-    console.log(`[Lite-STEP] Stored current model pair in server memory (batch: ${batchId}).`);
-
-    // The command rides on a real file push: the contract requires
-    // `content`, and a page drops a file.push without it, wipe and all
-    // (found by the whole-chain e2e, 2026-11-15). The page discards this
-    // copy because the wipe reloads it; the pair arrives in the re-send.
-    const wipeMsg = JSON.stringify({
+    // ONE frame: the command rides on the .py (the frame needs `content`;
+    // the page does not load it). The .ifc is not sent here, or it would
+    // land in the current project before the page moves.
+    const frame = JSON.stringify({
       type: "file.push",
-      version: "1.3",
-      id: `wipe-${Date.now()}`,
+      version: "1.4",
+      id: `newproj-${Date.now()}`,
       direction: "to-client",
       filename: pyFilename,
       fileType: "python",
       content: pyContent,
       sizeBytes: Buffer.byteLength(pyContent, "utf-8"),
-      command: "/delete:all",
+      command: LiteStepServer.NEW_PROJECT_COMMAND,
+      projectName,
       batchId,
     });
-
     for (const ws of recipients) {
       try {
-        ws.send(wipeMsg);
-        console.log(`[Lite-STEP] Sent /delete:all wipe command to client.`);
+        ws.send(frame);
       } catch (e) {
-        console.error(`[Lite-STEP] Failed to send wipe command: ${e}`);
+        console.error(`[Lite-STEP] Failed to send the new-project push: ${e}`);
       }
     }
-    return true;
+    console.log(`[Lite-STEP] Asked ${recipients.length} page(s) to open project '${projectName}' (batch ${batchId}).`);
+    return "sent";
   }
 
-  /** Send a batch's model pair to a client */
-  private _sendModelPair(ws: WebSocket, pair: ModelPair): void {
+  /** Send a model pair to a client, as one batch (no command). */
+  private _sendModelPair(ws: WebSocket, pair: ModelPair, batchId: string = this._newBatchId()): void {
     const { pyContent, pyFilename, ifcContent, ifcFilename } = pair;
-    const batchId = `vsc-pair-${Date.now()}`;
 
     try {
       const pyPush = JSON.stringify({
         type: "file.push",
-        version: "1.1",
+        version: "1.4",
         id: `pair-py-${Date.now()}`,
         direction: "to-client",
         filename: pyFilename,
@@ -241,7 +276,7 @@ export class LiteStepServer {
 
       const ifcPush = JSON.stringify({
         type: "file.push",
-        version: "1.1",
+        version: "1.4",
         id: `pair-ifc-${Date.now()}`,
         direction: "to-client",
         filename: ifcFilename,
@@ -366,6 +401,7 @@ export class LiteStepServer {
       this._clients.delete(ws);
       this._incomingState.delete(ws);
       this._gate.release(ws);
+      this._capabilities.delete(ws);
       const interval = this._heartbeatIntervals.get(ws);
       if (interval) {
         clearInterval(interval);
@@ -426,6 +462,7 @@ export class LiteStepServer {
   private _handleStatusMessage(ws: WebSocket, msg: ProtocolMessage & { type: "status" }): void {
     console.log(`[Lite-STEP] Status for ${msg.id}: ${msg.status}`);
     if (msg.status === "connected") {
+      this._capabilities.set(ws, Array.isArray(msg.capabilities) ? msg.capabilities.filter((c): c is string => typeof c === "string") : []);
       console.log(
         `[Lite-STEP] Web client connected handshake (capabilities: ${JSON.stringify(msg.capabilities || [])})`
       );
@@ -465,6 +502,14 @@ export class LiteStepServer {
         case "hello":
           console.log("[Lite-STEP] Received hello-ack from client");
           break;
+        case "error": {
+          // A page refused something we sent (local-bridge 1.4), e.g. a
+          // new project it could not open. Say so to the user.
+          const text = msg.error ?? msg.message ?? "unknown error";
+          console.warn(`[Lite-STEP] Ginnung refused push ${String(msg.id)}: ${text}`);
+          this._host.warn(`Lite-STEP: Ginnung did not accept the push: ${text}`);
+          break;
+        }
       }
     } catch (e) {
       console.error(`[Lite-STEP] Error parsing message: ${e}`);

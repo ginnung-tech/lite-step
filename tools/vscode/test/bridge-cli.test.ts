@@ -63,35 +63,70 @@ describe("bridge-cli", { timeout: 15000 }, () => {
     assert.deepEqual(await next((e) => e.event === "pushed"), { event: "pushed", ok: false });
   });
 
-  test("Push sends /delete:all, and the reloaded page gets the pair once by batch id", async () => {
+  test("Push sends the pair, no command: the page replaces its current project's model", async () => {
     const page = await connect("https://ginnung.tech");
-    page.ws.send(JSON.stringify({ type: "status", id: "s", status: "connected", wantsModel: false }));
+    page.ws.send(JSON.stringify({ type: "status", id: "s", status: "connected", capabilities: ["file.push", "command", "new:project"] }));
     await wait(100);
     child.stdin!.write(JSON.stringify({ cmd: "push", py: "x = 1", ifc: "ISO-10303-21;" }) + "\n");
     assert.deepEqual(await next((e) => e.event === "pushed"), { event: "pushed", ok: true });
+    await wait(150);
+    const files = page.frames.filter((f) => f.type === "file.push");
+    assert.deepEqual(files.map((f) => [f.filename, f.fileType, f.content]), [["output.py", "python", "x = 1"], ["output.ifc", "ifc", "ISO-10303-21;"]]);
+    assert.ok(files.every((f) => f.command === undefined), "a Push never carries a command");
+    assert.equal(files[0].batchId, files[1].batchId);
+    page.ws.close();
+  });
+
+  test("Push as New Project: one frame, then the pair once to the new project's page by batch id", async () => {
+    const page = await connect("https://ginnung.tech");
+    page.ws.send(JSON.stringify({ type: "status", id: "s", status: "connected", capabilities: ["file.push", "command", "new:project"] }));
     await wait(100);
-    const wipe = page.frames.find((f) => f.command === "/delete:all");
-    assert.ok(wipe, JSON.stringify(page.frames));
-    // What the Ginnung page requires of any file.push (contract local-bridge,
-    // `content` required): without it the page drops the frame, wipe and all.
-    assert.equal(typeof wipe!.content, "string");
-    assert.equal(wipe!.fileType, "python");
-    assert.equal(typeof wipe!.batchId, "string");
+    child.stdin!.write(JSON.stringify({ cmd: "push-new", py: "x = 2", ifc: "ISO-2", name: "Carport study" }) + "\n");
+    assert.deepEqual(await next((e) => e.event === "pushed-new"), { event: "pushed-new", result: "sent" });
+    await wait(150);
+    const sent = page.frames.filter((f) => f.type === "file.push");
+    assert.equal(sent.length, 1, "only the command frame: the .ifc must not reach the current project");
+    const cmd = sent[0];
+    assert.equal(cmd.command, "/new:project");
+    assert.equal(cmd.projectName, "Carport study");
+    assert.equal(typeof cmd.content, "string");
+    assert.equal(typeof cmd.batchId, "string");
     page.ws.close();
 
-    const reloaded = await connect("https://ginnung.tech");
-    reloaded.ws.send(JSON.stringify({ type: "status", id: "s2", status: "connected", wantsModel: true, awaitingBatchId: wipe!.batchId }));
+    // The new project's page asks for that batch by id: the pair, once, no command.
+    const moved = await connect("https://ginnung.tech");
+    moved.ws.send(JSON.stringify({ type: "status", id: "s2", status: "connected", wantsModel: true, awaitingBatchId: cmd.batchId }));
     await wait(200);
-    const files = reloaded.frames.filter((f) => f.type === "file.push").map((f) => [f.filename, f.content]);
-    assert.deepEqual(files, [["output.py", "x = 1"], ["output.ifc", "ISO-10303-21;"]]);
-    assert.ok(reloaded.frames.every((f) => f.command === undefined));
-    reloaded.ws.close();
+    const files = moved.frames.filter((f) => f.type === "file.push");
+    assert.deepEqual(files.map((f) => [f.filename, f.content]), [["output.py", "x = 2"], ["output.ifc", "ISO-2"]]);
+    assert.ok(files.every((f) => f.command === undefined));
+    moved.ws.close();
 
     const again = await connect("https://ginnung.tech");
-    again.ws.send(JSON.stringify({ type: "status", id: "s3", status: "connected", wantsModel: true, awaitingBatchId: wipe!.batchId }));
+    again.ws.send(JSON.stringify({ type: "status", id: "s3", status: "connected", wantsModel: true, awaitingBatchId: cmd.batchId }));
     await wait(200);
     assert.equal(again.frames.filter((f) => f.type === "file.push").length, 0);
     again.ws.close();
+  });
+
+  test("Push as New Project is not sent to a page that cannot open projects", async () => {
+    const page = await connect("https://ginnung.tech");
+    page.ws.send(JSON.stringify({ type: "status", id: "s", status: "connected", capabilities: ["file.push", "command"] }));
+    await wait(100);
+    child.stdin!.write(JSON.stringify({ cmd: "push-new", py: "x", ifc: "I", name: "n" }) + "\n");
+    assert.deepEqual(await next((e) => e.event === "pushed-new"), { event: "pushed-new", result: "unsupported" });
+    await wait(100);
+    assert.equal(page.frames.filter((f) => f.type === "file.push").length, 0);
+    page.ws.close();
+  });
+
+  test("a refusal from the page reaches the user", async () => {
+    const page = await connect("https://ginnung.tech");
+    page.ws.send(JSON.stringify({ type: "status", id: "s", status: "connected" }));
+    page.ws.send(JSON.stringify({ type: "error", version: "1.4", id: "newproj-1", error: "Projects are not available on this Ginnung page." }));
+    const warn = await next((e) => e.event === "warn" && String(e.message).includes("Projects are not available"));
+    assert.ok(warn);
+    page.ws.close();
   });
 
   test("a file pushed from the page is reported, not written", async () => {

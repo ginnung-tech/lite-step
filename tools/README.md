@@ -36,7 +36,9 @@ A rich language and tooling extension for authoring buildings in Python with Lit
 - **Lite-STEP Compilation**: Compiles Lite-STEP Python scripts directly into valid IFC4X3 models with automatic environment resolution.
 - **3D Preview**: In-editor Webview panel rendering models with ThatOpen Components and Web-IFC WASM.
 - **Direct Push to Blender**: Push models directly to the running Blender instance over `ws://127.0.0.1:9876`.
-- **Direct Push to Web Clients**: Push scripts or IFC models to connected WebSocket clients over `ws://127.0.0.1:9877`.
+- **Push to the Ginnung web app** over `ws://127.0.0.1:9877`, two ways:
+  - **Push Model to Web** replaces the current project's model with yours (`output.py` + `output.ifc`); the chat and everything else stay.
+  - **Push Model to Web as New Project** asks for a name, opens a new project in the page, and loads the model there. It needs a page with projects on; otherwise it says so and nothing changes.
 - **Editor Ergonomics**: CodeLens compile triggers, file decorations, hover docs, and a dedicated status sidebar.
 
 ### Installation
@@ -125,7 +127,7 @@ Both tools listen on this computer only (`127.0.0.1`), and a web page can reach 
 - **Why this is enough.** A page cannot set or forge its `Origin` header, and a browser sends `Origin: https://app.example.com` only for a page it loaded from that site over verified TLS. That is why entries must be `https://`, and why there is no token, pairing code or call to any server.
 - **The handshake.** The tool sends `hello`. A web page must answer `status: "connected"` within 5 seconds and send nothing before it; until then it is sent nothing else.
 - **What a web page may send.** To VS Code: `.py` and `.ifc` files, saved in a new folder of the workspace. To Blender: `.ifc` only, and it can never name a `.blend` file on your disk to open (`blendPath` is honoured from local programs only).
-- **A push is your action.** VS Code sends your model only when you press Push, and only to pages that completed the handshake. Saving a file sends nothing, and neither does a page connecting. If no page is connected, the push fails and says so; nothing is queued.
+- **A push is your action.** VS Code sends your model only when you press Push (or Push as New Project), and only to pages that completed the handshake. Saving a file sends nothing, and neither does a page connecting. If no page is connected, the push fails and says so; nothing is queued. The tool never asks a page to erase anything.
 
 Programs on this computer run as you and are trusted; these rules are about web pages.
 

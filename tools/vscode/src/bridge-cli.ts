@@ -13,10 +13,12 @@
  *   {"event":"status","text":"...","tooltip":"..."}
  *   {"event":"warn"|"error","message":"..."}
  *   {"event":"received","filename":"output.py","sizeBytes":5,"content":"..."}
- *   {"event":"pushed","ok":true}
+ *   {"event":"pushed","ok":true}                       after push
+ *   {"event":"pushed-new","result":"sent"|"not-connected"|"unsupported"}
  *
  * stdin, one JSON object per line:
- *   {"cmd":"push","py":"...","ifc":"..."}   Push (the /delete:all + re-send flow)
+ *   {"cmd":"push","py":"...","ifc":"..."}                  Push (replace the current project's model)
+ *   {"cmd":"push-new","py":"...","ifc":"...","name":"..."}  Push as New Project
  *   {"cmd":"stop"}
  *
  * Received files are reported, never written to disk.
@@ -80,7 +82,7 @@ function main(): void {
 
   const lines = readline.createInterface({ input: process.stdin });
   lines.on("line", (line) => {
-    let cmd: { cmd?: string; py?: string; ifc?: string };
+    let cmd: { cmd?: string; py?: string; ifc?: string; name?: string };
     try {
       cmd = JSON.parse(line);
     } catch {
@@ -88,7 +90,9 @@ function main(): void {
       return;
     }
     if (cmd.cmd === "push") {
-      emit({ event: "pushed", ok: server.pushModelWithWipe(cmd.py ?? "", cmd.ifc ?? "") });
+      emit({ event: "pushed", ok: server.pushModel(cmd.py ?? "", cmd.ifc ?? "") });
+    } else if (cmd.cmd === "push-new") {
+      emit({ event: "pushed-new", result: server.pushAsNewProject(cmd.py ?? "", cmd.ifc ?? "", cmd.name ?? "") });
     } else if (cmd.cmd === "stop") {
       server.stop();
       process.exit(0);
