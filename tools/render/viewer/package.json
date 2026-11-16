@@ -1,0 +1,20 @@
+{
+  "name": "lite-step-web-render",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Vendored ThatOpen Components render stack for the headless Vision-validator page. Bundled offline into web_render/vendor/ at image-build time.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build:vendor": "node build-vendor.mjs"
+  },
+  "dependencies": {
+    "@thatopen/components": "3.4.8",
+    "@thatopen/fragments": "3.4.7",
+    "three": "0.185.1",
+    "web-ifc": "0.0.77"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.5"
+  }
+}
