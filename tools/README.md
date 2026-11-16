@@ -5,7 +5,6 @@ This directory contains editor and CAD extensions for working with **Lite-STEP**
 - **[Blender Extension](blender/)**: Live synchronization bridge for Blender (5.0+) with Bonsai and PBR presentation rendering.
 - **[VS Code Extension](vscode/)**: Authoring, compilation, 3D preview, and multi-target push synchronization for Lite-STEP DSL files (`.py`).
 - **[Lapin](lapin/)**: Lite-STEP models in [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller: push a model in, and keep it up to date as the script changes.
-- **[6-Axis Renderer](render/)**: Headless ThatOpen (`IfcImporter` + `FragmentsManager` with `LodMode.ALL_VISIBLE`) renderer outputting 6 cardinal/aerial PNG views of any compiled `.ifc`.
 
 ---
 
@@ -83,7 +82,7 @@ pip install <lapin checkout>/python       # until then
 | `lite-step lapin fetch -o context.ifc` | The open Lapin project as IFC, to read or build against |
 | `lite-step lapin remove model.py` | Unlinks the model from Lapin (Ctrl+Z there brings it back) |
 
-Every command takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a pre-built `.lapin` or a compiled `.ifc`.
+Every command takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a pre-built `.lapin` or a compiled `.ifc`. `.lapin` output writes Lapin's internal Format 3 package directly and checks the running Lapin version against tested versions; Lapin ignores the embedded `source/parametric.json` and starter script today.
 
 ### How a push behaves
 

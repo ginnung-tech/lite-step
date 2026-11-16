@@ -195,6 +195,7 @@ class _FakeLapin:
     links: list = []
     calls: list = []
     params: dict = {}
+    version: str = "0.1.1238"
 
     def __init__(self, port=None, project=None):
         pass
@@ -220,7 +221,7 @@ class _FakeLapin:
             _FakeLapin.links.append(link)
             return {"linkId": link["id"]}
         if method == "engine.hello":
-            return {"productName": "Lapin", "version": "0.1.0", "project": None}
+            return {"productName": "Lapin", "version": _FakeLapin.version, "project": None}
         if method == "project.reloadLink":
             assert any(x["id"] == params["id"] for x in _FakeLapin.links)
             return {}
@@ -249,7 +250,7 @@ class _FakeLapin:
 def fake_lapin(monkeypatch: pytest.MonkeyPatch):
     import types
 
-    _FakeLapin.links, _FakeLapin.calls, _FakeLapin.params = [], [], {}
+    _FakeLapin.links, _FakeLapin.calls, _FakeLapin.params, _FakeLapin.version = [], [], {}, "0.1.1238"
     module = types.SimpleNamespace(Lapin=_FakeLapin, LapinError=RuntimeError, engines=lambda: [])
     monkeypatch.setitem(sys.modules, "lapinbim", module)
     return _FakeLapin
@@ -260,11 +261,11 @@ def test_lapin_push_links_the_compiled_model_then_reloads_it(tmp_path: Path, fak
     assert main(["lapin", "push", str(model), "--port", "1"]) == 0
     assert (tmp_path / "output.lapin").is_file(), "default push compiles a .lapin package beside the source"
     assert not (tmp_path / "output.ifc").exists(), "default .lapin push leaves no stray output.ifc"
-    assert [m for m, _ in fake_lapin.calls] == ["project.linkLapin"]
+    assert [m for m, _ in fake_lapin.calls] == ["engine.hello", "project.linkLapin"]
 
     fake_lapin.calls.clear()
     assert main(["lapin", "push", str(model), "--port", "1"]) == 0
-    assert fake_lapin.calls == [("project.reloadLink", {"id": "L1"})], "the second push reloads the same link"
+    assert fake_lapin.calls == [("engine.hello", {}), ("project.reloadLink", {"id": "L1"})], "the second push reloads the same link"
     assert len(fake_lapin.links) == 1
 
 
@@ -285,7 +286,7 @@ def test_lapin_push_of_another_folder_makes_its_own_link(tmp_path: Path, fake_la
     (tmp_path / "b").mkdir()
     assert main(["lapin", "push", str(_write_model(tmp_path / "a")), "--port", "1"]) == 0
     assert main(["lapin", "push", str(_write_model(tmp_path / "b")), "--port", "1"]) == 0
-    assert [m for m, _ in fake_lapin.calls] == ["project.linkLapin", "project.linkLapin"]
+    assert [m for m, _ in fake_lapin.calls] == ["engine.hello", "project.linkLapin", "engine.hello", "project.linkLapin"]
 
 
 def test_lapin_remove_unlinks_this_model_and_no_other(tmp_path: Path, fake_lapin) -> None:
@@ -468,10 +469,10 @@ def test_lapin_package_bool_param_evaluates_as_python(tmp_path: Path, fake_lapin
     assert by_name["FLAG"] is True
 
 
-def test_lapin_package_skips_opening_voids_and_keeps_transparency(tmp_path: Path) -> None:
+def test_lapin_package_skips_opening_voids_and_keeps_transparency(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     import json
     import zipfile
-    from lite_step.compiler.lapin_package import build_lapin_package
+    from tools.lapin.lapin_package import build_lapin_package
 
     model = _write_model(
         tmp_path,
@@ -490,7 +491,9 @@ result = proj
     ifc_file = ifcopenshell.open(str(tmp_path / "output.ifc"))
     assert len(ifc_file.by_type("IfcOpeningElement")) >= 1
     pkg = tmp_path / "transp_test.lapin"
+    capsys.readouterr()
     stats = build_lapin_package(tmp_path / "output.ifc", pkg, source_path=model)
+    assert "warning: writing Lapin internal Format 3" in capsys.readouterr().err
     assert stats["elements"] >= 2
     with zipfile.ZipFile(pkg) as zf:
         manifest = json.loads(zf.read("manifest.json"))
@@ -500,12 +503,9 @@ result = proj
         mat_arrows = [p["path"] for p in manifest["parts"] if "IfcMaterial" in p["path"]]
         assert len(body_arrows) == 1
         assert len(mat_arrows) == 1
-        try:
-            import pyarrow.ipc as ipc
-        except ImportError:
-            return
-        bodies = ipc.open_file(zf.read(body_arrows[0])).read_all().to_pylist()
-        mats = ipc.open_file(zf.read(mat_arrows[0])).read_all().to_pylist()
+        pyarrow = pytest.importorskip("pyarrow")
+        bodies = pyarrow.ipc.open_file(zf.read(body_arrows[0])).read_all().to_pylist()
+        mats = pyarrow.ipc.open_file(zf.read(mat_arrows[0])).read_all().to_pylist()
         assert any("material" in json.loads(b["attr:body"])["parts"][0] for b in bodies)
         assert any(m["attr:transparency"] == pytest.approx(0.6, abs=0.05) for m in mats)
 
@@ -518,20 +518,65 @@ def test_compile_main_rejects_format_extension_mismatch(tmp_path: Path) -> None:
 
         p = Project(name="t")
         p.add(Box(id="b", start=Point(x=0, y=0, z=0), end=Point(x=1000, y=1000, z=1000)))
-        compile_main(result=p, source_path=str(model), output_name="bad.ifc", format="lapin")
+        compile_main(result=p, source_path=str(model), output_name="bad.ifc", output_format="lapin")
 
 
-def test_arrow_ipc_nonfinite_float_handling() -> None:
-    from lite_step.compiler.arrow_ipc import ArrowColumn, write_arrow_file
+def test_compile_main_lapin_requires_tools_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import lite_step.compiler.executor as executor
+    from lite_step.models import Project, Point, Box
 
-    col = ArrowColumn("v", "float64", [1.5, float("nan"), float("inf")], nullable=True)
-    raw = write_arrow_file([col], 3)
+    model = _write_model(tmp_path)
+    p = Project(name="t")
+    p.add(Box(id="b", start=Point(x=0, y=0, z=0), end=Point(x=1000, y=1000, z=1000)))
+    monkeypatch.setattr(executor, "__file__", str(tmp_path / "lite_step" / "compiler" / "executor.py"))
+    with pytest.raises(executor.LiteStepCompileError, match="tools/lapin"):
+        executor.compile_main(result=p, source_path=str(model), output_format="lapin")
+
+
+def test_lapin_push_refuses_untested_lapin_version(
+    tmp_path: Path, fake_lapin, capsys: pytest.CaptureFixture
+) -> None:
+    from tools.lapin.lapin_package import UnsupportedLapinVersionError, validate_lapin_version
+
+    fake_lapin.version = "9.9.9"
+    model = _write_model(tmp_path)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 2
+    err = capsys.readouterr().err
+    assert "9.9.9" in err
+    assert "format=ifc" in err
+    assert not (tmp_path / "output.lapin").exists()
+
+    with pytest.raises(UnsupportedLapinVersionError, match="9.9.9"):
+        validate_lapin_version("9.9.9")
+
+
+def test_arrow_ipc_roundtrip_with_pyarrow() -> None:
+    pyarrow = pytest.importorskip("pyarrow")
+    from tools.lapin.arrow_ipc import ArrowColumn, write_arrow_file
+
+    cols = [
+        ArrowColumn("id", "utf8", ["e1", None, "e3"], nullable=True, metadata=(("lapin.kind", "Text"),)),
+        ArrowColumn("order", "int32", [0, 1, None], nullable=True),
+        ArrowColumn("height", "float64", [1.5, float("nan"), float("inf")], nullable=True, metadata=(("lapin.kind", "Number"),)),
+        ArrowColumn("active", "bool", [True, None, False], nullable=True, metadata=(("lapin.kind", "Bool"),)),
+        ArrowColumn("nums", "list_float64", [[1.0, 2.5], None, []], nullable=True, metadata=(("lapin.kind", "Numbers"),)),
+        ArrowColumn("related", "list_utf8", [["a", "b"], [], ["c"]], nullable=False),
+    ]
+    raw = write_arrow_file(cols, 3)
     assert raw[:6] == b"ARROW1"
     with pytest.raises(ValueError, match="Non-finite"):
         write_arrow_file([ArrowColumn("v", "float64", [float("nan")], nullable=False)], 1)
-    try:
-        import pyarrow.ipc as ipc
-    except ImportError:
-        return
-    tbl = ipc.open_file(raw).read_all()
-    assert tbl["v"].to_pylist() == [1.5, None, None]
+
+    table = pyarrow.ipc.open_file(raw).read_all()
+    assert table.to_pydict() == {
+        "id": ["e1", None, "e3"],
+        "order": [0, 1, None],
+        "height": [1.5, None, None],
+        "active": [True, None, False],
+        "nums": [[1.0, 2.5], None, []],
+        "related": [["a", "b"], [], ["c"]],
+    }
+    assert table.schema.field("id").metadata == {b"lapin.kind": b"Text"}
+    assert table.schema.field("nums").metadata == {b"lapin.kind": b"Numbers"}

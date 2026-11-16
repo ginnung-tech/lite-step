@@ -73,16 +73,24 @@ def lapin_of(source: Path) -> Path:
     return source if source.suffix.lower() == _LAPIN_EXT else source.with_suffix(_LAPIN_EXT)
 
 
-def compile_lapin(source: Path, quiet: bool) -> Path:
+def _lapin_tools():
+    repo_root = str(Path(__file__).resolve().parents[2])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools.lapin import lapin_package
+
+    return lapin_package
+
+
+def compile_lapin(source: Path, quiet: bool, lapin_version: str | None = None) -> Path:
     """Compile ``source`` (``.py`` or ``.ifc``) into ``<name>.lapin`` beside it."""
     target = lapin_of(source)
     if source.suffix.lower() == _LAPIN_EXT:
         return target
 
+    lapin_pkg = _lapin_tools()
     if source.suffix.lower() == _IFC_EXT:
-        from lite_step.compiler.lapin_package import build_lapin_package
-
-        build_lapin_package(source, target, source_path=None)
+        lapin_pkg.build_lapin_package(source, target, source_path=None, lapin_version=lapin_version)
         return target
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
@@ -96,7 +104,7 @@ def compile_lapin(source: Path, quiet: bool) -> Path:
         raise Failed(f"{source} did not define module-scope `result`.")
     try:
         with _quiet(quiet):
-            compile_main(result=result, source_path=str(source), output_name=target.name, format="lapin")
+            compile_main(result=result, source_path=str(source), output_name=target.name, output_format="lapin")
     except LiteStepCompileError:
         raise Failed(f"{source.name} did not compile (run `lite-step {source.name}` to see why).") from None
     print(f"compiled {source.name} -> {target.name} in {time.time() - started:.0f} s")
@@ -293,6 +301,19 @@ def _resolved_format(source: Path, requested: str | None) -> str:
     return "ifc" if source.suffix.lower() == _IFC_EXT else "lapin"
 
 
+def _check_lapin_version(client) -> str:
+    lapin_pkg = _lapin_tools()
+    try:
+        hello = client.call("engine.hello", {}) or {}
+    except lapinbim().LapinError as e:
+        raise Failed(f"could not read Lapin version: {e}") from None
+    version = _field(hello, "version")
+    try:
+        return lapin_pkg.validate_lapin_version(version)
+    except lapin_pkg.UnsupportedLapinVersionError as e:
+        raise Failed(str(e)) from None
+
+
 def push_once(args, client) -> int:
     source = Path(args.source).resolve()
     fmt = _resolved_format(source, args.format)
@@ -303,7 +324,8 @@ def push_once(args, client) -> int:
         method = "project.importIfc"
         call_params = {"path": str(target), "mode": "link"}
     else:
-        target = compile_lapin(source, quiet=not args.verbose)
+        lapin_version = _check_lapin_version(client)
+        target = compile_lapin(source, quiet=not args.verbose, lapin_version=lapin_version)
         other_target = ifc_of(source)
         method = "project.linkLapin"
         call_params = {"path": str(target)}

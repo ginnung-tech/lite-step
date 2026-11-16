@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_name is not None:
         kwargs["output_name"] = args.output_name
     if args.format is not None:
-        kwargs["format"] = args.format
+        kwargs["output_format"] = args.format
     if args.verbose:
         kwargs["verbose"] = True
 

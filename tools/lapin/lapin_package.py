@@ -19,6 +19,7 @@ import math
 import os
 import pprint
 import struct
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,28 @@ _FORMAT = "lapin-project"
 _VERSION = 3
 _APP = "lite-step 0.1.0"
 _PRODUCT = "lapin"
+
+# Tested Lapin app versions (`engine.hello` -> `version`): Format 3 is Lapin's
+# internal save format without a public stability contract, so untested
+# versions are refused loudly unless checked/added here.
+TESTED_LAPIN_VERSIONS: Tuple[str, ...] = ("0.1.1238", "1.0.0")
+
+
+class UnsupportedLapinVersionError(ValueError):
+    """Raised when the target Lapin version has not been tested for Format 3."""
+
+
+def validate_lapin_version(version: Optional[str]) -> str:
+    """Ensure ``version`` is a Lapin version tested against this Format 3 writer."""
+    normalized = (version or "").strip()
+    if normalized not in TESTED_LAPIN_VERSIONS:
+        tested = ", ".join(TESTED_LAPIN_VERSIONS)
+        found = normalized or "unknown"
+        raise UnsupportedLapinVersionError(
+            f"Lapin version {found!r} is not tested with Lite-STEP's internal Format 3 .lapin writer "
+            f"(tested: {tested}). Pass format=ifc / --format ifc instead."
+        )
+    return normalized
 
 _ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$"
 _LAPIN_NS = uuid.UUID("6f2c1a8e-5d3b-4c71-9a0e-2b8f4e7d1c55")
@@ -485,10 +508,20 @@ def build_lapin_package(
     ifc_path: Path,
     output_path: Path,
     source_path: Optional[Path] = None,
+    lapin_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convert a compiled IFC4X3 file (and optional Lite-STEP `.py` source) to a Format 3 `.lapin` zip."""
     import ifcopenshell
     import ifcopenshell.util.unit
+
+    if lapin_version is not None:
+        validate_lapin_version(lapin_version)
+    print(
+        f"warning: writing Lapin internal Format {_VERSION} (.lapin) directly "
+        f"(tested with Lapin {', '.join(TESTED_LAPIN_VERSIONS)}); "
+        "Format 3 has no stability contract for external writers — use format=ifc for stable interchange",
+        file=sys.stderr,
+    )
 
     ifc = ifcopenshell.open(str(ifc_path))
     model_name = source_path.stem if source_path is not None else ifc_path.stem
