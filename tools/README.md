@@ -76,13 +76,13 @@ pip install <lapin checkout>/python       # until then
 
 | Command | Does |
 |---|---|
-| `lite-step lapin status` | The Lapins open on this computer, and the IFC files linked in the chosen one |
-| `lite-step lapin push model.py` | Compiles to `model.ifc` beside the script, then links it into Lapin; later pushes reload that link. `--watch` pushes again at every save |
+| `lite-step lapin status` | The Lapins open on this computer, and the models linked in the chosen one |
+| `lite-step lapin push model.py` | Compiles to `model.lapin` beside the script (pass `format=ifc` or `--format ifc` for legacy IFC link), then links it into Lapin; later pushes reload that link. `--watch` pushes again at every save |
 | `lite-step lapin pull model.py` | Writes the parameters changed in Lapin into the script (see below) |
 | `lite-step lapin fetch -o context.ifc` | The open Lapin project as IFC, to read or build against |
 | `lite-step lapin remove model.py` | Unlinks the model from Lapin (Ctrl+Z there brings it back) |
 
-Every command takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a compiled `.ifc`.
+Every command takes `--port N` or `--project NAME` when several Lapins are open. A model file may also be a pre-built `.lapin` or a compiled `.ifc`.
 
 ### How a push behaves
 

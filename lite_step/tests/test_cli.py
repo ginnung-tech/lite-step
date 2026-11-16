@@ -193,12 +193,20 @@ class _FakeLapin:
 
     def call(self, method, params=None, timeout=None):
         _FakeLapin.calls.append((method, params))
+        if method == "project.linkLapin":
+            assert Path(params["path"]).is_file()
+            link = {"id": f"L{len(_FakeLapin.links) + 1}", "kind": "lapin", "path": params["path"],
+                    "elements": 1, "storeys": 1, "name": Path(params["path"]).stem}
+            _FakeLapin.links.append(link)
+            return {"linkId": link["id"]}
         if method == "project.importIfc":
             assert params["mode"] == "link" and Path(params["path"]).is_file()
             link = {"id": f"L{len(_FakeLapin.links) + 1}", "kind": "ifc", "path": params["path"],
                     "elements": 1, "storeys": 1, "name": Path(params["path"]).stem}
             _FakeLapin.links.append(link)
             return {"linkId": link["id"]}
+        if method == "engine.hello":
+            return {"productName": "Lapin", "version": "0.1.0", "project": None}
         if method == "project.reloadLink":
             assert any(x["id"] == params["id"] for x in _FakeLapin.links)
             return {}
@@ -236,13 +244,25 @@ def fake_lapin(monkeypatch: pytest.MonkeyPatch):
 def test_lapin_push_links_the_compiled_model_then_reloads_it(tmp_path: Path, fake_lapin) -> None:
     model = _write_model(tmp_path)
     assert main(["lapin", "push", str(model), "--port", "1"]) == 0
-    assert (tmp_path / "output.ifc").is_file(), "compiled beside the source, as `lite-step output.py` does"
-    assert [m for m, _ in fake_lapin.calls] == ["project.importIfc"]
+    assert (tmp_path / "output.lapin").is_file(), "default push compiles a .lapin package beside the source"
+    assert not (tmp_path / "output.ifc").exists(), "default .lapin push leaves no stray output.ifc"
+    assert [m for m, _ in fake_lapin.calls] == ["project.linkLapin"]
 
     fake_lapin.calls.clear()
     assert main(["lapin", "push", str(model), "--port", "1"]) == 0
     assert fake_lapin.calls == [("project.reloadLink", {"id": "L1"})], "the second push reloads the same link"
     assert len(fake_lapin.links) == 1
+
+
+def test_lapin_push_format_ifc_uses_legacy_ifc_link(tmp_path: Path, fake_lapin) -> None:
+    model = _write_model(tmp_path)
+    assert main(["lapin", "push", str(model), "format=ifc", "--port", "1"]) == 0
+    assert (tmp_path / "output.ifc").is_file(), "format=ifc compiles output.ifc beside the source"
+    assert [m for m, _ in fake_lapin.calls] == ["project.importIfc"]
+
+    fake_lapin.calls.clear()
+    assert main(["lapin", "push", str(model), "--format", "ifc", "--port", "1"]) == 0
+    assert fake_lapin.calls == [("project.reloadLink", {"id": "L1"})]
 
 
 def test_lapin_push_of_another_folder_makes_its_own_link(tmp_path: Path, fake_lapin) -> None:
@@ -251,7 +271,7 @@ def test_lapin_push_of_another_folder_makes_its_own_link(tmp_path: Path, fake_la
     (tmp_path / "b").mkdir()
     assert main(["lapin", "push", str(_write_model(tmp_path / "a")), "--port", "1"]) == 0
     assert main(["lapin", "push", str(_write_model(tmp_path / "b")), "--port", "1"]) == 0
-    assert [m for m, _ in fake_lapin.calls] == ["project.importIfc", "project.importIfc"]
+    assert [m for m, _ in fake_lapin.calls] == ["project.linkLapin", "project.linkLapin"]
 
 
 def test_lapin_remove_unlinks_this_model_and_no_other(tmp_path: Path, fake_lapin) -> None:
@@ -262,6 +282,20 @@ def test_lapin_remove_unlinks_this_model_and_no_other(tmp_path: Path, fake_lapin
     main(["lapin", "push", str(b), "--port", "1"])
     assert main(["lapin", "remove", str(a), "--port", "1"]) == 0
     assert [Path(x["path"]).parent.name for x in fake_lapin.links] == ["b"]
+
+
+def test_lapin_status_lists_lapin_and_ifc_links_and_remove_respects_format(
+    tmp_path: Path, fake_lapin, capsys: pytest.CaptureFixture
+) -> None:
+    model = _write_model(tmp_path)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    assert main(["lapin", "push", str(model), "format=ifc", "--port", "1"]) == 0
+    assert main(["lapin", "status", "--port", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "(lapin):" in out and "(ifc):" in out
+
+    assert main(["lapin", "remove", str(model), "format=ifc", "--port", "1"]) == 0
+    assert [x["kind"] for x in fake_lapin.links] == ["lapin"]
 
 
 def test_lapin_without_the_tools_folder_says_where_to_get_it(
@@ -353,3 +387,31 @@ def test_lapin_ctrl_c_stops_without_a_traceback(
     err = capsys.readouterr().err
     assert "stopped." in err
     assert "Traceback" not in err
+
+
+def test_lapin_package_contains_valid_format3_tables_and_params(tmp_path: Path, fake_lapin) -> None:
+    import hashlib
+    import json
+    import zipfile
+
+    model = _write_model(tmp_path, PARAM_MODEL)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    pkg = tmp_path / "output.lapin"
+    assert pkg.is_file()
+    with zipfile.ZipFile(pkg) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        assert manifest["format"] == "lapin-project"
+        assert manifest["version"] == 3
+        assert "LapinSharedBody" in manifest["classes"]
+        assert manifest["classes"]["LapinScript"] == "scripting"
+        for part in manifest["parts"]:
+            raw = zf.read(part["path"])
+            assert len(raw) == part["size"]
+            assert hashlib.sha256(raw).hexdigest() == part["sha256"]
+            if part["path"].endswith(".arrow"):
+                assert raw[:6] == b"ARROW1" and raw[-6:] == b"ARROW1"
+        foreign_paths = {f["path"] for f in manifest.get("foreign", [])}
+        assert "source/parametric.json" in foreign_paths
+        ir = json.loads(zf.read("source/parametric.json"))
+        assert [p["name"] for p in ir["params"]] == ["HEIGHT"]
+        assert "scripts/output_params.py" in zf.namelist()
