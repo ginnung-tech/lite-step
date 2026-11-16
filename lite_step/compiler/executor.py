@@ -1032,6 +1032,7 @@ def compile_main(
     output_name: str = "output.ifc",
     verbose: bool = False,
     base_ifc: Optional[str] = None,
+    format: Optional[str] = None,
 ) -> Optional[Path]:
     """Validate -> normalize -> generate IFC -> write next to source.
 
@@ -1260,12 +1261,30 @@ def compile_main(
               f"{len(ifc_result.ifc_content)} bytes of IFC, not written")
         return None
 
-    out_arg = Path(output_name)
+    fmt = (format or ("lapin" if str(output_name).lower().endswith(".lapin") else "ifc")).lower()
+    if fmt not in ("ifc", "lapin"):
+        raise ValueError(f"Unsupported format {format!r}; expected 'ifc' or 'lapin'.")
+    effective_output = "output.lapin" if fmt == "lapin" and output_name == "output.ifc" else output_name
+
+    out_arg = Path(effective_output)
     if out_arg.is_absolute():
         out = out_arg
     else:
         out = Path(source_path).resolve().parent / out_arg
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    if fmt == "lapin":
+        import tempfile
+        from lite_step.compiler.lapin_package import build_lapin_package
+
+        with tempfile.TemporaryDirectory(prefix="lite-step-lapin-") as tmp:
+            temp_ifc = Path(tmp) / f"{Path(source_path).stem}.ifc"
+            temp_ifc.write_text(ifc_result.ifc_content, encoding="utf-8")
+            build_lapin_package(temp_ifc, out, source_path=Path(source_path))
+        suffix = f" [patch base={base_path.name}]" if base_path else ""
+        print(f"wrote {out} ({out.stat().st_size} bytes){suffix}")
+        return out
+
     out.write_text(ifc_result.ifc_content)
 
     # 2D drawing stylesheet, beside the IFC at the path the file's

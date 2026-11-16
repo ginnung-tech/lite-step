@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import zipfile
 
-from arrow_ipc import ArrowColumn, write_arrow_file
+from .arrow_ipc import ArrowColumn, write_arrow_file
 
 _FORMAT = "lapin-project"
 _VERSION = 3

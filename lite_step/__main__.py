@@ -48,6 +48,16 @@ def _run_tool(name: str, argv: list[str]) -> int:
     return int(runpy.run_path(str(cli), run_name="__lite_step_tool__")["main"](argv) or 0)
 
 
+def _normalize_argv(argv: list[str]) -> list[str]:
+    out: list[str] = []
+    for item in argv:
+        if item.startswith("format="):
+            out.extend(["--format", item.split("=", 1)[1]])
+        else:
+            out.append(item)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "lapin":
@@ -55,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="lite-step",
-        description="Compile a Lite-STEP output.py file to IFC4.",
+        description="Compile a Lite-STEP output.py file to IFC4 (or .lapin).",
     )
     parser.add_argument(
         "path",
@@ -65,8 +75,14 @@ def main(argv: list[str] | None = None) -> int:
         "-o",
         "--output-name",
         default=None,
-        help="Output filename written next to the source (default: output.ifc). "
+        help="Output filename written next to the source (default: output.ifc, or output.lapin with --format lapin). "
         "Absolute paths are honored as-is.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("ifc", "lapin"),
+        default=None,
+        help="Output format (default: ifc, or inferred from -o *.lapin).",
     )
     parser.add_argument(
         "-v",
@@ -74,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print Project name and element count before compiling.",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_normalize_argv(argv))
 
     model_path = Path(args.path).resolve()
     if not model_path.is_file():
@@ -97,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     kwargs: dict = {"result": result, "source_path": str(model_path)}
     if args.output_name is not None:
         kwargs["output_name"] = args.output_name
+    if args.format is not None:
+        kwargs["format"] = args.format
     if args.verbose:
         kwargs["verbose"] = True
 

@@ -100,6 +100,20 @@ def test_cli_output_name_override(tmp_path: Path) -> None:
     assert not (tmp_path / "output.ifc").exists()
 
 
+def test_cli_lapin_compile_target_optional(tmp_path: Path) -> None:
+    model = _write_model(tmp_path)
+    assert main([str(model), "--format", "lapin"]) == 0
+    assert (tmp_path / "output.lapin").is_file()
+    assert not (tmp_path / "output.ifc").exists()
+
+    (tmp_path / "output.lapin").unlink()
+    assert main([str(model), "format=lapin"]) == 0
+    assert (tmp_path / "output.lapin").is_file()
+
+    assert main([str(model), "-o", "custom.lapin"]) == 0
+    assert (tmp_path / "custom.lapin").is_file()
+
+
 def test_cli_missing_result_returns_nonzero(tmp_path: Path) -> None:
     # Module-scope ``result`` is the contract; without it, the CLI must
     # exit non-zero with a clear stderr message rather than crashing

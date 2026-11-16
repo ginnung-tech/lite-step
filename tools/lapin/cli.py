@@ -38,7 +38,6 @@ import contextlib
 import os
 import runpy
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -70,22 +69,16 @@ def lapin_of(source: Path) -> Path:
     return source if source.suffix.lower() == ".lapin" else source.with_suffix(".lapin")
 
 
-def _tool_module(name: str):
-    tool_dir = str(Path(__file__).resolve().parent)
-    if tool_dir not in sys.path:
-        sys.path.insert(0, tool_dir)
-    return __import__(name)
-
-
 def compile_lapin(source: Path, quiet: bool) -> Path:
     """Compile ``source`` (``.py`` or ``.ifc``) into ``<name>.lapin`` beside it."""
     target = lapin_of(source)
     if source.suffix.lower() == ".lapin":
         return target
 
-    lapin_pkg = _tool_module("lapin_package")
     if source.suffix.lower() == ".ifc":
-        lapin_pkg.build_lapin_package(source, target, source_path=None)
+        from lite_step.compiler.lapin_package import build_lapin_package
+
+        build_lapin_package(source, target, source_path=None)
         return target
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
@@ -97,14 +90,11 @@ def compile_lapin(source: Path, quiet: bool) -> Path:
     result = namespace.get("result")
     if result is None:
         raise Failed(f"{source} did not define module-scope `result`.")
-    with tempfile.TemporaryDirectory(prefix="lite-step-lapin-") as tmp:
-        temp_ifc = Path(tmp) / f"{source.stem}.ifc"
-        try:
-            with _quiet(quiet):
-                compile_main(result=result, source_path=str(source), output_name=str(temp_ifc))
-        except LiteStepCompileError:
-            raise Failed(f"{source.name} did not compile (run `lite-step {source.name}` to see why).") from None
-        lapin_pkg.build_lapin_package(temp_ifc, target, source_path=source)
+    try:
+        with _quiet(quiet):
+            compile_main(result=result, source_path=str(source), output_name=target.name, format="lapin")
+    except LiteStepCompileError:
+        raise Failed(f"{source.name} did not compile (run `lite-step {source.name}` to see why).") from None
     print(f"compiled {source.name} -> {target.name} in {time.time() - started:.0f} s")
     return target
 
