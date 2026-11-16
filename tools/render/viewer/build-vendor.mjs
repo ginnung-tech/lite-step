@@ -69,7 +69,10 @@ function sourceFilesSorted(srcDir) {
     }
   };
   walk(srcDir, '');
-  out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  out.sort((a, b) => {
+    if (a[0] < b[0]) return -1;
+    return a[0] > b[0] ? 1 : 0;
+  });
   return out;
 }
 
@@ -161,7 +164,9 @@ async function main() {
   console.log(`vendor build complete -> ${OUT}`);
 }
 
-main().catch((e) => {
+try {
+  await main();
+} catch (e) {
   console.error('vendor build failed:', e);
   process.exit(1);
-});
+}

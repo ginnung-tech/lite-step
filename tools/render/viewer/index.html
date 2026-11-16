@@ -1,7 +1,8 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8" />
+<title>Lite-STEP Headless 6-Axis Render</title>
 <style>
   html, body { margin: 0; padding: 0; background: #87a5c8; }
   #wrap { position: relative; width: 1024px; height: 1024px; }
@@ -43,22 +44,26 @@
   #295 ("Fetch API cannot load file:// URLs"); fix in #296.
 */
 (() => {
+  const MIME_BY_EXT = [
+    ['.wasm', 'application/wasm'],
+    ['.ifc', 'application/octet-stream'],
+    ['.mjs', 'text/javascript'],
+    ['.js', 'text/javascript'],
+    ['.json', 'application/json'],
+  ];
+  function contentTypeFor(url) {
+    for (const [ext, ct] of MIME_BY_EXT) {
+      if (url.endsWith(ext)) return ct;
+    }
+    return 'application/octet-stream';
+  }
   const origFetch = window.fetch.bind(window);
   window.fetch = function patchedFetch(input, init) {
-    // Resolve the input against the document base BEFORE checking the scheme
-    // — Emscripten / web-ifc passes relative WASM paths like
-    // './vendor/web-ifc/web-ifc.wasm' which only resolve to file:// after the
-    // browser applies document.baseURI. A naive url.startsWith('file://')
-    // check fails on those relative inputs and the shim falls through to the
-    // original fetch — which then explodes with "URL scheme 'file' is not
-    // supported". Surfaced 2026-05-29 staging verify of #296; fix in #297.
     const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
     let resolved;
     try {
       resolved = new URL(rawUrl, document.baseURI).href;
     } catch (_e) {
-      // Pathological input (empty / data:/blob: with weird shape) — hand it
-      // to the original fetch and let it error naturally.
       return origFetch(input, init);
     }
     if (!resolved.startsWith('file://')) return origFetch(input, init);
@@ -68,13 +73,7 @@
       xhr.responseType = 'arraybuffer';
       xhr.onload = () => {
         if (xhr.status === 200 || xhr.status === 0) {
-          const ct = resolved.endsWith('.wasm') ? 'application/wasm'
-                   : resolved.endsWith('.ifc')  ? 'application/octet-stream'
-                   : resolved.endsWith('.mjs')  ? 'text/javascript'
-                   : resolved.endsWith('.js')   ? 'text/javascript'
-                   : resolved.endsWith('.json') ? 'application/json'
-                   : 'application/octet-stream';
-          resolve(new Response(xhr.response, {status: 200, headers: {'content-type': ct}}));
+          resolve(new Response(xhr.response, { status: 200, headers: { 'content-type': contentTypeFor(resolved) } }));
         } else {
           reject(new TypeError('XHR-shim fetch ' + resolved + ' returned status ' + xhr.status));
         }
