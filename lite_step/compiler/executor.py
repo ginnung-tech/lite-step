@@ -1026,12 +1026,48 @@ def _run_query(project, selector: str):
     return None
 
 
+def _load_lapin_package_builder():
+    """Load ``tools/lapin/lapin_package.py`` dynamically so compiler core stays decoupled."""
+    tools_dir = Path(__file__).resolve().parents[2] / "tools" / "lapin"
+    pkg_file = tools_dir / "lapin_package.py"
+    arrow_file = tools_dir / "arrow_ipc.py"
+    if not pkg_file.is_file() or not arrow_file.is_file():
+        raise LiteStepCompileError(
+            "Building .lapin output requires the tools/lapin folder of a Lite-STEP checkout "
+            f"(looked for {pkg_file}). Pass format=ifc or run from a Lite-STEP checkout.",
+            reasons=["missing tools/lapin/lapin_package.py"],
+        )
+    import importlib.util
+    import types
+
+    for pkg_name, pkg_path in (("tools", tools_dir.parent), ("tools.lapin", tools_dir)):
+        if pkg_name not in sys.modules:
+            pkg = types.ModuleType(pkg_name)
+            pkg.__path__ = [str(pkg_path)]
+            sys.modules[pkg_name] = pkg
+
+    def _load(mod_name: str, path: Path):
+        if mod_name in sys.modules:
+            return sys.modules[mod_name]
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not load module spec for {path}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    _load("tools.lapin.arrow_ipc", arrow_file)
+    return _load("tools.lapin.lapin_package", pkg_file).build_lapin_package
+
+
 def compile_main(
     result: Optional[Project] = None,
     source_path: Optional[str] = None,
     output_name: str = "output.ifc",
     verbose: bool = False,
     base_ifc: Optional[str] = None,
+    output_format: Optional[str] = None,
 ) -> Optional[Path]:
     """Validate -> normalize -> generate IFC -> write next to source.
 
@@ -1121,6 +1157,17 @@ def compile_main(
         if base_ifc is None:
             # Optional — absence means generate mode (no global declared).
             base_ifc = caller_globals.get("base_ifc")
+
+    fmt = (output_format or ("lapin" if str(output_name).lower().endswith(".lapin") else "ifc")).lower()
+    if fmt not in ("ifc", "lapin"):
+        raise ValueError(f"Unsupported output_format {output_format!r}; expected 'ifc' or 'lapin'.")
+    effective_output = "output.lapin" if fmt == "lapin" and output_name == "output.ifc" else output_name
+    out_suffix = Path(effective_output).suffix.lower()
+    if fmt == "ifc" and out_suffix == ".lapin":
+        raise ValueError(f"Output path {output_name!r} uses '.lapin' extension with output_format='ifc'.")
+    if fmt == "lapin" and out_suffix == ".ifc":
+        raise ValueError(f"Output path {output_name!r} uses '.ifc' extension with output_format='lapin'.")
+    build_lapin_package = _load_lapin_package_builder() if fmt == "lapin" else None
 
     if not isinstance(result, Project):
         raise TypeError(
@@ -1260,12 +1307,24 @@ def compile_main(
               f"{len(ifc_result.ifc_content)} bytes of IFC, not written")
         return None
 
-    out_arg = Path(output_name)
+    out_arg = Path(effective_output)
     if out_arg.is_absolute():
         out = out_arg
     else:
         out = Path(source_path).resolve().parent / out_arg
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    if build_lapin_package is not None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="lite-step-lapin-") as tmp:
+            temp_ifc = Path(tmp) / f"{Path(source_path).stem}.ifc"
+            temp_ifc.write_text(ifc_result.ifc_content, encoding="utf-8")
+            build_lapin_package(temp_ifc, out, source_path=Path(source_path))
+        suffix = f" [patch base={base_path.name}]" if base_path else ""
+        print(f"wrote {out} ({out.stat().st_size} bytes){suffix}")
+        return out
+
     out.write_text(ifc_result.ifc_content)
 
     # 2D drawing stylesheet, beside the IFC at the path the file's

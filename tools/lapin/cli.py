@@ -5,7 +5,8 @@ modeller. This tool sits beside the Blender and VS Code tools: it talks to
 another program on this computer, which the compiler itself never does.
 
     lite-step lapin status                 # the Lapins open, and the Lite-STEP models linked in them
-    lite-step lapin push model.py          # compile, then link the IFC into Lapin, or reload the link
+    lite-step lapin push model.py          # compile to .lapin, then link into Lapin or reload the link
+    lite-step lapin push model.py format=ifc  # link as IFC instead of .lapin
     lite-step lapin push model.py --watch  # again at every save
     lite-step lapin pull model.py          # write the parameters changed in Lapin into the script
     lite-step lapin fetch -o context.ifc   # the open Lapin project as IFC, to build against
@@ -58,16 +59,66 @@ class Failed(Exception):
 # --------------------------------------------------------------------------- the model
 
 
+_LAPIN_EXT = ".lapin"
+_IFC_EXT = ".ifc"
+
+
 def ifc_of(source: Path) -> Path:
     """The IFC a push links: ``source`` itself, or the model compiled beside it (``<name>.ifc``)."""
-    return source if source.suffix.lower() == ".ifc" else source.with_suffix(".ifc")
+    return source if source.suffix.lower() == _IFC_EXT else source.with_suffix(_IFC_EXT)
+
+
+def lapin_of(source: Path) -> Path:
+    """The `.lapin` package a push links: ``source`` itself, or ``<name>.lapin`` beside it."""
+    return source if source.suffix.lower() == _LAPIN_EXT else source.with_suffix(_LAPIN_EXT)
+
+
+def _lapin_tools():
+    repo_root = str(Path(__file__).resolve().parents[2])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from tools.lapin import lapin_package
+
+    return lapin_package
+
+
+def compile_lapin(source: Path, quiet: bool, lapin_version: str | None = None) -> Path:
+    """Compile ``source`` (``.py`` or ``.ifc``) into ``<name>.lapin`` beside it."""
+    target = lapin_of(source)
+    if source.suffix.lower() == _LAPIN_EXT:
+        return target
+
+    lapin_pkg = _lapin_tools()
+    if source.suffix.lower() == _IFC_EXT:
+        lapin_pkg.build_lapin_package(source, target, source_path=None, lapin_version=lapin_version)
+        return target
+
+    from lite_step.compiler.executor import LiteStepCompileError, compile_main
+
+    started = time.time()
+    print(f"compiling {source.name}…", flush=True)
+    with _quiet(quiet):
+        namespace = runpy.run_path(str(source), run_name="__lite_step__")
+    result = namespace.get("result")
+    if result is None:
+        raise Failed(f"{source} did not define module-scope `result`.")
+    try:
+        with _quiet(quiet):
+            compile_main(result=result, source_path=str(source), output_name=target.name, output_format="lapin")
+    except LiteStepCompileError:
+        raise Failed(f"{source.name} did not compile (run `lite-step {source.name}` to see why).") from None
+    print(f"compiled {source.name} -> {target.name} in {time.time() - started:.0f} s")
+    return target
 
 
 def compile_model(source: Path, quiet: bool) -> Path:
     """The model file compiled to ``<name>.ifc`` beside it, as ``lite-step model.py -o <name>.ifc`` does."""
     target = ifc_of(source)
-    if source.suffix.lower() == ".ifc":
+    suffix = source.suffix.lower()
+    if suffix == _IFC_EXT:
         return target
+    if suffix == _LAPIN_EXT:
+        raise Failed(f"cannot push {source.name} with format=ifc (pass the .py or .ifc source, or omit format=ifc)")
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
 
@@ -244,14 +295,52 @@ def pull_params(client, source: Path, model: str) -> list:
     return changes
 
 
+def _resolved_format(source: Path, requested: str | None) -> str:
+    if requested is not None:
+        return requested
+    return "ifc" if source.suffix.lower() == _IFC_EXT else "lapin"
+
+
+def _check_lapin_version(client) -> str:
+    lapin_pkg = _lapin_tools()
+    try:
+        hello = client.call("engine.hello", {}) or {}
+    except lapinbim().LapinError as e:
+        raise Failed(f"could not read Lapin version: {e}") from None
+    version = _field(hello, "version")
+    try:
+        return lapin_pkg.validate_lapin_version(version)
+    except lapin_pkg.UnsupportedLapinVersionError as e:
+        raise Failed(str(e)) from None
+
+
 def push_once(args, client) -> int:
     source = Path(args.source).resolve()
-    ifc = compile_model(source, quiet=not args.verbose)
-    link = find_link(client, ifc)
+    fmt = _resolved_format(source, args.format)
     started = time.time()
+    if fmt == "ifc":
+        target = compile_model(source, quiet=not args.verbose)
+        other_target = lapin_of(source)
+        method = "project.importIfc"
+        call_params = {"path": str(target), "mode": "link"}
+    else:
+        lapin_version = _check_lapin_version(client)
+        target = compile_lapin(source, quiet=not args.verbose, lapin_version=lapin_version)
+        other_target = ifc_of(source)
+        method = "project.linkLapin"
+        call_params = {"path": str(target)}
+
+    link = find_link(client, target)
+    other_link = find_link(client, other_target)
+    if other_link is not None:
+        print(
+            f"warning: Lapin also has {other_target.name} linked; run `lite-step lapin remove {source.name}` "
+            "or remove the old link to avoid duplicate geometry",
+            file=sys.stderr,
+        )
     try:
         if link is None:
-            answer = client.call("project.importIfc", {"path": str(ifc), "mode": "link"}, timeout=IMPORT_TIMEOUT)
+            answer = client.call(method, call_params, timeout=IMPORT_TIMEOUT)
             link_id = _field(answer, "linkId")
             verb = "linked"
         else:
@@ -260,10 +349,12 @@ def push_once(args, client) -> int:
             verb = "reloaded"
     except lapinbim().LapinError as e:
         raise Failed(f"Lapin refused the file: {e}") from None
-    now = find_link(client, ifc) or {}
-    print(f"{verb} {ifc.name} in Lapin in {time.time() - started:.0f} s: "
+
+    now = find_link(client, target) or {}
+    print(f"{verb} {target.name} in Lapin in {time.time() - started:.0f} s: "
           f"{_field(now, 'elements', '?')} elements on {_field(now, 'storeys', '?')} storeys (link {link_id})")
-    publish_params(client, source, model_id(args))
+    if source.suffix.lower() == ".py":
+        publish_params(client, source, model_id(args))
     return 0
 
 
@@ -327,11 +418,11 @@ def cmd_status(args) -> int:
         if args.port:
             e = client.call("engine.hello", {})
             print(f"Lapin on port {args.port}: {e['productName']} {e['version']}, project {e['project'] or '(not saved yet)'}")
-        links = [x for x in client.query("link.list") or [] if _field(x, "kind") == "ifc"]
+        links = [x for x in client.query("link.list") or [] if _field(x, "kind") in ("lapin", "ifc")]
         if not links:
-            print("  no IFC links in this project")
+            print("  no Lapin or IFC links in this project")
         for x in links:
-            print(f"  link {_field(x, 'name')}: {_field(x, 'elements')} elements, {_field(x, 'storeys')} storeys, "
+            print(f"  link {_field(x, 'name')} ({_field(x, 'kind')}): {_field(x, 'elements')} elements, {_field(x, 'storeys')} storeys, "
                   f"from {_field(x, 'path') or '(the browser: no path, cannot reload)'}")
     return 0
 
@@ -346,16 +437,42 @@ def cmd_fetch(args) -> int:
     return 0
 
 
+def _remove_candidates(source: Path, fmt: str | None) -> list[Path]:
+    if fmt == "ifc":
+        return [ifc_of(source)]
+    if fmt == "lapin":
+        return [lapin_of(source)]
+    return [lapin_of(source), ifc_of(source)]
+
+
 def cmd_remove(args) -> int:
-    ifc = ifc_of(Path(args.source).resolve())
+    source = Path(args.source).resolve()
+    candidates = _remove_candidates(source, args.format)
+    removed: list[tuple[Path, object]] = []
     with connect(args) as client:
-        link = find_link(client, ifc)
-        if link is None:
-            print(f"{ifc.name} is not linked in this Lapin.")
-            return 0
-        client.execute("link.unlink", {"id": _field(link, "id")})
-    print(f"unlinked {ifc.name} ({_field(link, 'elements')} elements); Ctrl+Z in Lapin brings it back.")
+        for candidate in candidates:
+            link = find_link(client, candidate)
+            if link is None:
+                continue
+            client.execute("link.unlink", {"id": _field(link, "id")})
+            removed.append((candidate, link))
+    if not removed:
+        print(f"{candidates[0].name} is not linked in this Lapin.")
+        return 0
+    for target, link in removed:
+        print(f"unlinked {target.name} ({_field(link, 'elements')} elements); Ctrl+Z in Lapin brings it back.")
     return 0
+
+
+def _normalize_argv(argv: list[str] | None) -> list[str]:
+    raw = sys.argv[1:] if argv is None else list(argv)
+    out: list[str] = []
+    for item in raw:
+        if item.startswith("format="):
+            out.extend(["--format", item.split("=", 1)[1]])
+        else:
+            out.append(item)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -365,22 +482,24 @@ def main(argv: list[str] | None = None) -> int:
     def command(name, run, help, source=False):
         p = sub.add_parser(name, help=help)
         if source:
-            p.add_argument("source", help="a model file (.py, compiled first) or a compiled .ifc")
+            p.add_argument("source", help="a model file (.py, compiled first), a .lapin, or a compiled .ifc")
         p.add_argument("--port", type=int, help="the Lapin on this port")
         p.add_argument("--project", help="the Lapin with this project open (its file name or a part of its path)")
         p.set_defaults(run=run)
         return p
 
-    push = command("push", cmd_push, "compile, then link the IFC into Lapin or reload the link", source=True)
+    push = command("push", cmd_push, "compile to .lapin (or format=ifc), then link into Lapin or reload the link", source=True)
+    push.add_argument("--format", choices=("lapin", "ifc"), default=None, help="push format (default: lapin; pass format=ifc for legacy IFC link)")
     push.add_argument("--watch", action="store_true", help="push again whenever the file is saved")
     push.add_argument("-v", "--verbose", action="store_true", help="show the compiler's reports")
     command("pull", cmd_pull, "write the parameters changed in Lapin into the script", source=True)
     command("status", cmd_status, "the Lapins open on this computer and the models linked in them")
     fetch = command("fetch", cmd_fetch, "the open Lapin project as IFC, to build against")
     fetch.add_argument("-o", "--output", required=True, help="the IFC file to write")
-    command("remove", cmd_remove, "unlink the model from Lapin", source=True)
+    remove = command("remove", cmd_remove, "unlink the model from Lapin", source=True)
+    remove.add_argument("--format", choices=("lapin", "ifc"), default=None, help="which linked format to unlink (default: auto)")
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_normalize_argv(argv))
     if getattr(args, "source", None) and not Path(args.source).is_file():
         parser.error(f"not a file: {args.source}")
     try:
