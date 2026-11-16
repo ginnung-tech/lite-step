@@ -57,9 +57,14 @@
     }
     return 'application/octet-stream';
   }
+  function urlStringOf(input) {
+    if (typeof input === 'string') return input;
+    if (input instanceof URL) return input.href;
+    return input?.url || '';
+  }
   const origFetch = window.fetch.bind(window);
   window.fetch = function patchedFetch(input, init) {
-    const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
+    const rawUrl = urlStringOf(input);
     let resolved;
     try {
       resolved = new URL(rawUrl, document.baseURI).href;

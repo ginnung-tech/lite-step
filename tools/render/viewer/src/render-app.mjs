@@ -189,7 +189,7 @@ let contextHidden = false;       // current visibility state of context ids
  * file:// GET through XHR.
  */
 async function loadFragmentsWorkerBlob() {
-  const workerUrl = new URL('./vendor/fragments-worker.mjs', document.baseURI);
+  const workerUrl = new URL('./vendor/fragments-worker.mjs', document.baseURI).href;
   const res = await fetch(workerUrl);
   const code = await res.text();
   return URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
