@@ -200,14 +200,26 @@ def _pack_int32(values: Sequence[int | None]) -> tuple[bytes, int, list[bytes]]:
     return vbuf, nulls, [bytes(data)]
 
 
-def _pack_float64(values: Sequence[float | None]) -> tuple[bytes, int, list[bytes]]:
-    valid = [v is not None for v in values]
+def _pack_float64(values: Sequence[float | None], nullable: bool = True) -> tuple[bytes, int, list[bytes]]:
+    valid: list[bool] = []
+    floats: list[float] = []
+    for v in values:
+        if v is None:
+            valid.append(False)
+            floats.append(0.0)
+            continue
+        f = float(v)
+        if not math.isfinite(f):
+            if not nullable:
+                raise ValueError(f"Non-finite float64 value {v!r} in non-nullable column")
+            valid.append(False)
+            floats.append(0.0)
+        else:
+            valid.append(True)
+            floats.append(f)
     vbuf, nulls = _pack_validity(valid)
     data = bytearray()
-    for v in values:
-        f = 0.0 if v is None else float(v)
-        if not math.isfinite(f):
-            f = 0.0
+    for f in floats:
         data.extend(struct.pack("<d", f))
     return vbuf, nulls, [bytes(data)]
 
@@ -231,7 +243,7 @@ def _pack_column(col: ArrowColumn) -> tuple[list[tuple[int, int]], list[bytes]]:
         vbuf, nulls, bufs = _pack_int32(col.values)
         return [(len(col.values), nulls)], [vbuf, *bufs]
     if col.kind == "float64":
-        vbuf, nulls, bufs = _pack_float64(col.values)
+        vbuf, nulls, bufs = _pack_float64(col.values, nullable=col.nullable)
         return [(len(col.values), nulls)], [vbuf, *bufs]
     if col.kind == "bool":
         vbuf, nulls, bufs = _pack_bool(col.values)
@@ -277,7 +289,7 @@ def _build_type(fb: _FlatBuilder, kind: str) -> tuple[int, int, list[int]]:
         ])
         return _TYPE_INT, t, []
     if kind == "float64":
-        t = fb.build_table(1, [(0, 2, lambda: fb.prepend_i16(2))])  # DOUBLE=2
+        t = fb.build_table(1, [(0, 2, lambda: fb.prepend_i16(2))])  # IEEE float64 precision (enum ordinal 2)
         return _TYPE_FLOATING_POINT, t, []
     if kind == "bool":
         return _TYPE_BOOL, fb.build_table(0, []), []
@@ -346,14 +358,14 @@ def _build_record_batch_message(
 ) -> bytes:
     fb = _FlatBuilder()
 
-    def write_nodes() -> None:
+    def write_nodes() -> int:
         fb.start_struct_vector(len(nodes), 16, 8)
         for length, null_count in reversed(nodes):
             fb.prepend_i64(null_count)
             fb.prepend_i64(length)
         return fb.end_vector(len(nodes))
 
-    def write_buffers() -> None:
+    def write_buffers() -> int:
         fb.start_struct_vector(len(buffers), 16, 8)
         for offset, length in reversed(buffers):
             fb.prepend_i64(length)

@@ -59,23 +59,27 @@ class Failed(Exception):
 # --------------------------------------------------------------------------- the model
 
 
+_LAPIN_EXT = ".lapin"
+_IFC_EXT = ".ifc"
+
+
 def ifc_of(source: Path) -> Path:
     """The IFC a push links: ``source`` itself, or the model compiled beside it (``<name>.ifc``)."""
-    return source if source.suffix.lower() == ".ifc" else source.with_suffix(".ifc")
+    return source if source.suffix.lower() == _IFC_EXT else source.with_suffix(_IFC_EXT)
 
 
 def lapin_of(source: Path) -> Path:
     """The `.lapin` package a push links: ``source`` itself, or ``<name>.lapin`` beside it."""
-    return source if source.suffix.lower() == ".lapin" else source.with_suffix(".lapin")
+    return source if source.suffix.lower() == _LAPIN_EXT else source.with_suffix(_LAPIN_EXT)
 
 
 def compile_lapin(source: Path, quiet: bool) -> Path:
     """Compile ``source`` (``.py`` or ``.ifc``) into ``<name>.lapin`` beside it."""
     target = lapin_of(source)
-    if source.suffix.lower() == ".lapin":
+    if source.suffix.lower() == _LAPIN_EXT:
         return target
 
-    if source.suffix.lower() == ".ifc":
+    if source.suffix.lower() == _IFC_EXT:
         from lite_step.compiler.lapin_package import build_lapin_package
 
         build_lapin_package(source, target, source_path=None)
@@ -102,8 +106,11 @@ def compile_lapin(source: Path, quiet: bool) -> Path:
 def compile_model(source: Path, quiet: bool) -> Path:
     """The model file compiled to ``<name>.ifc`` beside it, as ``lite-step model.py -o <name>.ifc`` does."""
     target = ifc_of(source)
-    if source.suffix.lower() == ".ifc":
+    suffix = source.suffix.lower()
+    if suffix == _IFC_EXT:
         return target
+    if suffix == _LAPIN_EXT:
+        raise Failed(f"cannot push {source.name} with format=ifc (pass the .py or .ifc source, or omit format=ifc)")
 
     from lite_step.compiler.executor import LiteStepCompileError, compile_main
 
@@ -283,7 +290,7 @@ def pull_params(client, source: Path, model: str) -> list:
 def _resolved_format(source: Path, requested: str | None) -> str:
     if requested is not None:
         return requested
-    return "ifc" if source.suffix.lower() == ".ifc" else "lapin"
+    return "ifc" if source.suffix.lower() == _IFC_EXT else "lapin"
 
 
 def push_once(args, client) -> int:
@@ -292,36 +299,40 @@ def push_once(args, client) -> int:
     started = time.time()
     if fmt == "ifc":
         target = compile_model(source, quiet=not args.verbose)
-        link = find_link(client, target)
-        try:
-            if link is None:
-                answer = client.call("project.importIfc", {"path": str(target), "mode": "link"}, timeout=IMPORT_TIMEOUT)
-                link_id = _field(answer, "linkId")
-                verb = "linked"
-            else:
-                link_id = _field(link, "id")
-                client.call("project.reloadLink", {"id": link_id}, timeout=IMPORT_TIMEOUT)
-                verb = "reloaded"
-        except lapinbim().LapinError as e:
-            raise Failed(f"Lapin refused the file: {e}") from None
+        other_target = lapin_of(source)
+        method = "project.importIfc"
+        call_params = {"path": str(target), "mode": "link"}
     else:
         target = compile_lapin(source, quiet=not args.verbose)
-        link = find_link(client, target)
-        try:
-            if link is None:
-                answer = client.call("project.linkLapin", {"path": str(target)}, timeout=IMPORT_TIMEOUT)
-                link_id = _field(answer, "linkId")
-                verb = "linked"
-            else:
-                link_id = _field(link, "id")
-                client.call("project.reloadLink", {"id": link_id}, timeout=IMPORT_TIMEOUT)
-                verb = "reloaded"
-        except lapinbim().LapinError as e:
-            raise Failed(f"Lapin refused the file: {e}") from None
+        other_target = ifc_of(source)
+        method = "project.linkLapin"
+        call_params = {"path": str(target)}
+
+    link = find_link(client, target)
+    other_link = find_link(client, other_target)
+    if other_link is not None:
+        print(
+            f"warning: Lapin also has {other_target.name} linked; run `lite-step lapin remove {source.name}` "
+            "or remove the old link to avoid duplicate geometry",
+            file=sys.stderr,
+        )
+    try:
+        if link is None:
+            answer = client.call(method, call_params, timeout=IMPORT_TIMEOUT)
+            link_id = _field(answer, "linkId")
+            verb = "linked"
+        else:
+            link_id = _field(link, "id")
+            client.call("project.reloadLink", {"id": link_id}, timeout=IMPORT_TIMEOUT)
+            verb = "reloaded"
+    except lapinbim().LapinError as e:
+        raise Failed(f"Lapin refused the file: {e}") from None
+
     now = find_link(client, target) or {}
     print(f"{verb} {target.name} in Lapin in {time.time() - started:.0f} s: "
           f"{_field(now, 'elements', '?')} elements on {_field(now, 'storeys', '?')} storeys (link {link_id})")
-    publish_params(client, source, model_id(args))
+    if source.suffix.lower() == ".py":
+        publish_params(client, source, model_id(args))
     return 0
 
 
@@ -404,26 +415,30 @@ def cmd_fetch(args) -> int:
     return 0
 
 
+def _remove_candidates(source: Path, fmt: str | None) -> list[Path]:
+    if fmt == "ifc":
+        return [ifc_of(source)]
+    if fmt == "lapin":
+        return [lapin_of(source)]
+    return [lapin_of(source), ifc_of(source)]
+
+
 def cmd_remove(args) -> int:
     source = Path(args.source).resolve()
-    candidates = (
-        [ifc_of(source)] if args.format == "ifc"
-        else [lapin_of(source)] if args.format == "lapin"
-        else [lapin_of(source), ifc_of(source)]
-    )
+    candidates = _remove_candidates(source, args.format)
+    removed: list[tuple[Path, object]] = []
     with connect(args) as client:
-        link = None
-        target = candidates[0]
         for candidate in candidates:
             link = find_link(client, candidate)
-            if link is not None:
-                target = candidate
-                break
-        if link is None:
-            print(f"{target.name} is not linked in this Lapin.")
-            return 0
-        client.execute("link.unlink", {"id": _field(link, "id")})
-    print(f"unlinked {target.name} ({_field(link, 'elements')} elements); Ctrl+Z in Lapin brings it back.")
+            if link is None:
+                continue
+            client.execute("link.unlink", {"id": _field(link, "id")})
+            removed.append((candidate, link))
+    if not removed:
+        print(f"{candidates[0].name} is not linked in this Lapin.")
+        return 0
+    for target, link in removed:
+        print(f"unlinked {target.name} ({_field(link, 'elements')} elements); Ctrl+Z in Lapin brings it back.")
     return 0
 
 

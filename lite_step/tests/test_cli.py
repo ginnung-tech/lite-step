@@ -306,10 +306,29 @@ def test_lapin_status_lists_lapin_and_ifc_links_and_remove_respects_format(
     assert main(["lapin", "push", str(model), "format=ifc", "--port", "1"]) == 0
     assert main(["lapin", "status", "--port", "1"]) == 0
     out = capsys.readouterr().out
-    assert "(lapin):" in out and "(ifc):" in out
+    assert "(lapin):" in out
+    assert "(ifc):" in out
 
     assert main(["lapin", "remove", str(model), "format=ifc", "--port", "1"]) == 0
     assert [x["kind"] for x in fake_lapin.links] == ["lapin"]
+
+
+def test_lapin_push_lapin_source_with_format_ifc_refuses_and_remove_auto_clears_both(
+    tmp_path: Path, fake_lapin, capsys: pytest.CaptureFixture
+) -> None:
+    model = _write_model(tmp_path)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    capsys.readouterr()
+    assert main(["lapin", "push", str(model), "format=ifc", "--port", "1"]) == 0
+    assert "duplicate geometry" in capsys.readouterr().err
+    assert len(fake_lapin.links) == 2
+
+    pkg = tmp_path / "output.lapin"
+    assert main(["lapin", "push", str(pkg), "format=ifc", "--port", "1"]) == 2
+    assert "cannot push output.lapin with format=ifc" in capsys.readouterr().err
+
+    assert main(["lapin", "remove", str(model), "--port", "1"]) == 0
+    assert fake_lapin.links == []
 
 
 def test_lapin_without_the_tools_folder_says_where_to_get_it(
@@ -423,9 +442,96 @@ def test_lapin_package_contains_valid_format3_tables_and_params(tmp_path: Path, 
             assert len(raw) == part["size"]
             assert hashlib.sha256(raw).hexdigest() == part["sha256"]
             if part["path"].endswith(".arrow"):
-                assert raw[:6] == b"ARROW1" and raw[-6:] == b"ARROW1"
+                assert raw[:6] == b"ARROW1"
+                assert raw[-6:] == b"ARROW1"
         foreign_paths = {f["path"] for f in manifest.get("foreign", [])}
         assert "source/parametric.json" in foreign_paths
         ir = json.loads(zf.read("source/parametric.json"))
         assert [p["name"] for p in ir["params"]] == ["HEIGHT"]
         assert "scripts/output_params.py" in zf.namelist()
+
+
+def test_lapin_package_bool_param_evaluates_as_python(tmp_path: Path, fake_lapin) -> None:
+    import zipfile
+
+    bool_model = PARAM_MODEL.replace(
+        'DOUBLE = param(',
+        'FLAG = param(True, "", "Flag")\nDOUBLE = param(',
+    )
+    model = _write_model(tmp_path, bool_model)
+    assert main(["lapin", "push", str(model), "--port", "1"]) == 0
+    with zipfile.ZipFile(tmp_path / "output.lapin") as zf:
+        script = zf.read("scripts/output_params.py").decode("utf-8")
+    ns: dict = {}
+    exec(compile(script, "output_params.py", "exec"), ns)
+    by_name = {p["name"]: p["value"] for p in ns["PARAMS"]}
+    assert by_name["FLAG"] is True
+
+
+def test_lapin_package_skips_opening_voids_and_keeps_transparency(tmp_path: Path) -> None:
+    import json
+    import zipfile
+    from lite_step.compiler.lapin_package import build_lapin_package
+
+    model = _write_model(
+        tmp_path,
+        """
+from lite_step.models import Project, Point, Box
+
+proj = Project(name="transp_test")
+wall = Box(id="wall", start=Point(x=0, y=0, z=0), end=Point(x=4000, y=200, z=3000), type="wall")
+wall.void(Box(id="hole", start=Point(x=1000, y=-100, z=500), end=Point(x=2000, y=300, z=2000)))
+proj.add(wall)
+proj.add(Box(id="pane", start=Point(x=5000, y=0, z=0), end=Point(x=6000, y=100, z=2000), type="glass", color="#88ccff66"))
+result = proj
+""".strip(),
+    )
+    assert main([str(model)]) == 0
+    ifc_file = ifcopenshell.open(str(tmp_path / "output.ifc"))
+    assert len(ifc_file.by_type("IfcOpeningElement")) >= 1
+    pkg = tmp_path / "transp_test.lapin"
+    stats = build_lapin_package(tmp_path / "output.ifc", pkg, source_path=model)
+    assert stats["elements"] >= 2
+    with zipfile.ZipFile(pkg) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        assert "IfcOpeningElement" not in manifest["classes"]
+        assert "IfcMaterial" in manifest["classes"]
+        body_arrows = [p["path"] for p in manifest["parts"] if "LapinSharedBody" in p["path"]]
+        mat_arrows = [p["path"] for p in manifest["parts"] if "IfcMaterial" in p["path"]]
+        assert len(body_arrows) == 1
+        assert len(mat_arrows) == 1
+        try:
+            import pyarrow.ipc as ipc
+        except ImportError:
+            return
+        bodies = ipc.open_file(zf.read(body_arrows[0])).read_all().to_pylist()
+        mats = ipc.open_file(zf.read(mat_arrows[0])).read_all().to_pylist()
+        assert any("material" in json.loads(b["attr:body"])["parts"][0] for b in bodies)
+        assert any(m["attr:transparency"] == pytest.approx(0.6, abs=0.05) for m in mats)
+
+
+def test_compile_main_rejects_format_extension_mismatch(tmp_path: Path) -> None:
+    model = _write_model(tmp_path)
+    with pytest.raises(ValueError, match="extension"):
+        from lite_step.compiler.executor import compile_main
+        from lite_step.models import Project, Point, Box
+
+        p = Project(name="t")
+        p.add(Box(id="b", start=Point(x=0, y=0, z=0), end=Point(x=1000, y=1000, z=1000)))
+        compile_main(result=p, source_path=str(model), output_name="bad.ifc", format="lapin")
+
+
+def test_arrow_ipc_nonfinite_float_handling() -> None:
+    from lite_step.compiler.arrow_ipc import ArrowColumn, write_arrow_file
+
+    col = ArrowColumn("v", "float64", [1.5, float("nan"), float("inf")], nullable=True)
+    raw = write_arrow_file([col], 3)
+    assert raw[:6] == b"ARROW1"
+    with pytest.raises(ValueError, match="Non-finite"):
+        write_arrow_file([ArrowColumn("v", "float64", [float("nan")], nullable=False)], 1)
+    try:
+        import pyarrow.ipc as ipc
+    except ImportError:
+        return
+    tbl = ipc.open_file(raw).read_all()
+    assert tbl["v"].to_pylist() == [1.5, None, None]

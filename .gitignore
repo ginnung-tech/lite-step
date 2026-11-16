@@ -31,3 +31,6 @@ tools/*.zip
 
 tools/vscode/out-test/
 tools/vscode/out-cli/
+tools/render/viewer/node_modules/
+tools/render/viewer/vendor/
+tools/render/viewer/output.ifc

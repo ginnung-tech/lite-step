@@ -15,7 +15,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
+import pprint
 import struct
 import uuid
 from dataclasses import dataclass
@@ -107,40 +109,53 @@ def _encode_stored_body(
     faces: Sequence[int],
     color: str = "#c9ced6",
     part_name: str = "Body",
+    material_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     """Encode triangles into Lapin's `StoredBodies` base64 layout (`v64`/`t64`)."""
     rounded = [round(float(v), 4) for v in verts]
     v_bytes = struct.pack(f"<{len(rounded)}d", *rounded) if rounded else b""
     t_ints = [int(i) for i in faces]
     t_bytes = struct.pack(f"<{len(t_ints)}i", *t_ints) if t_ints else b""
-    stored = {
-        "parts": [
-            {
-                "name": part_name,
-                "color": color.lower(),
-                "v64": base64.b64encode(v_bytes).decode("ascii"),
-                "t64": base64.b64encode(t_bytes).decode("ascii"),
-            }
-        ]
+    part: Dict[str, Any] = {
+        "name": part_name,
+        "color": color.lower(),
+        "v64": base64.b64encode(v_bytes).decode("ascii"),
+        "t64": base64.b64encode(t_bytes).decode("ascii"),
     }
+    if material_id:
+        part["material"] = material_id
+    stored = {"parts": [part]}
     canonical = json.dumps(stored, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     return stored, _sha256_hex(canonical)
 
 
-def _extract_color(shape_geometry) -> str:
+def _extract_style(shape_geometry) -> Tuple[str, Optional[float], Optional[str]]:
+    """Return ``(hex_color, transparency, style_name)`` for the first shape material."""
+    color = "#c9ced6"
+    transparency: Optional[float] = None
+    style_name: Optional[str] = None
     try:
         mats = getattr(shape_geometry, "materials", None) or ()
-        if mats:
-            m = mats[0]
-            diffuse = getattr(m, "diffuse", None)
-            if diffuse is not None:
-                r = max(0, min(255, int(round(diffuse.r() * 255))))
-                g = max(0, min(255, int(round(diffuse.g() * 255))))
-                b = max(0, min(255, int(round(diffuse.b() * 255))))
-                return f"#{r:02x}{g:02x}{b:02x}"
-    except Exception:
+        if not mats:
+            return color, transparency, style_name
+        mat = mats[0]
+        diffuse = getattr(mat, "diffuse", None)
+        if diffuse is not None:
+            r = max(0, min(255, int(round(diffuse.r() * 255))))
+            g = max(0, min(255, int(round(diffuse.g() * 255))))
+            b = max(0, min(255, int(round(diffuse.b() * 255))))
+            color = f"#{r:02x}{g:02x}{b:02x}"
+        raw_trans = getattr(mat, "transparency", None)
+        if raw_trans is not None:
+            val = float(raw_trans)
+            if math.isfinite(val) and 0.001 < val < 1.0:
+                transparency = round(val, 3)
+        raw_name = getattr(mat, "name", None)
+        if isinstance(raw_name, str) and raw_name and raw_name != "DefaultMaterial":
+            style_name = raw_name
+    except (AttributeError, TypeError, ValueError):
         pass
-    return "#c9ced6"
+    return color, transparency, style_name
 
 
 def _arrow_kind(values: Sequence[Any]) -> str:
@@ -162,6 +177,27 @@ def _arrow_kind(values: Sequence[Any]) -> str:
     return "Json"
 
 
+def _attr_column(key: str, entities: Sequence[_Entity]) -> ArrowColumn:
+    vals = [e.attrs.get(key) for e in entities]
+    present_null = any(key in e.attrs and e.attrs[key] is None for e in entities)
+    kind = "Json" if present_null else _arrow_kind(vals)
+    meta = (("lapin.kind", kind),)
+    col_name = f"attr:{key}"
+    if kind == "Number":
+        return ArrowColumn(col_name, "float64", [None if v is None else float(v) for v in vals], nullable=True, metadata=meta)
+    if kind == "Bool":
+        return ArrowColumn(col_name, "bool", [None if v is None else bool(v) for v in vals], nullable=True, metadata=meta)
+    if kind == "Numbers":
+        return ArrowColumn(col_name, "list_float64", [None if v is None else [float(x) for x in v] for v in vals], nullable=True, metadata=meta)
+    if kind == "Text":
+        return ArrowColumn(col_name, "utf8", [None if v is None else str(v) for v in vals], nullable=True, metadata=meta)
+    serialized = [
+        None if key not in e.attrs else ("null" if e.attrs[key] is None else json.dumps(e.attrs[key], separators=(",", ":"), ensure_ascii=False))
+        for e in entities
+    ]
+    return ArrowColumn(col_name, "utf8", serialized, nullable=True, metadata=meta)
+
+
 def _serialize_entities(entities: Sequence[_Entity], order_of: Dict[str, int]) -> bytes:
     keys = sorted({k for e in entities for k in e.attrs.keys()})
     columns: List[ArrowColumn] = [
@@ -171,45 +207,7 @@ def _serialize_entities(entities: Sequence[_Entity], order_of: Dict[str, int]) -
         ArrowColumn("predefinedType", "utf8", [e.predefined_type for e in entities], nullable=True),
         ArrowColumn("order", "int32", [order_of[e.id] for e in entities], nullable=False),
     ]
-    for key in keys:
-        vals = [e.attrs.get(key) for e in entities]
-        present_null = any(key in e.attrs and e.attrs[key] is None for e in entities)
-        kind = "Json" if present_null else _arrow_kind(vals)
-        meta = (("lapin.kind", kind),)
-        if kind == "Number":
-            columns.append(ArrowColumn(
-                f"attr:{key}", "float64",
-                [None if v is None else float(v) for v in vals],
-                nullable=True, metadata=meta,
-            ))
-        elif kind == "Bool":
-            columns.append(ArrowColumn(
-                f"attr:{key}", "bool",
-                [None if v is None else bool(v) for v in vals],
-                nullable=True, metadata=meta,
-            ))
-        elif kind == "Numbers":
-            columns.append(ArrowColumn(
-                f"attr:{key}", "list_float64",
-                [None if v is None else [float(x) for x in v] for v in vals],
-                nullable=True, metadata=meta,
-            ))
-        elif kind == "Text":
-            columns.append(ArrowColumn(
-                f"attr:{key}", "utf8",
-                [None if v is None else str(v) for v in vals],
-                nullable=True, metadata=meta,
-            ))
-        else:
-            serialized: List[Optional[str]] = []
-            for e in entities:
-                if key not in e.attrs:
-                    serialized.append(None)
-                elif e.attrs[key] is None:
-                    serialized.append("null")
-                else:
-                    serialized.append(json.dumps(e.attrs[key], separators=(",", ":"), ensure_ascii=False))
-            columns.append(ArrowColumn(f"attr:{key}", "utf8", serialized, nullable=True, metadata=meta))
+    columns.extend(_attr_column(key, entities) for key in keys)
     return write_arrow_file(columns, len(entities))
 
 
@@ -231,7 +229,7 @@ def _serialize_relations(relations: Sequence[_Relation], order_of: Dict[str, int
 
 
 def _starter_script_code(model_name: str, params_meta: List[Dict[str, Any]]) -> str:
-    payload = json.dumps(params_meta, indent=2, ensure_ascii=False)
+    payload = pprint.pformat(params_meta, indent=2, sort_dicts=False)
     return (
         f'"""Lite-STEP parametric metadata for `{model_name}`.\n\n'
         "Generated by `lite-step lapin push` (Step 1). Pure-Python cascading geometry\n"
@@ -242,185 +240,187 @@ def _starter_script_code(model_name: str, params_meta: List[Dict[str, Any]]) -> 
     )
 
 
-def build_lapin_package(
-    ifc_path: Path,
-    output_path: Path,
-    source_path: Optional[Path] = None,
-) -> Dict[str, Any]:
-    """Convert a compiled IFC4X3 file (and optional Lite-STEP `.py` source) to a Format 3 `.lapin` zip."""
-    import ifcopenshell
-    import ifcopenshell.geom
-    import ifcopenshell.util.element
-    import ifcopenshell.util.unit
+class _PackageBuilder:
+    """Stateful accumulator for building a Format 3 `.lapin` entity/relation model."""
 
-    ifc = ifcopenshell.open(str(ifc_path))
-    model_name = source_path.stem if source_path is not None else ifc_path.stem
-    unit_scale = float(ifcopenshell.util.unit.calculate_unit_scale(ifc) or 1.0)
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        self.entities: List[_Entity] = []
+        self.relations: List[_Relation] = []
+        self.used_ids: set[str] = set()
+        self.shared_by_hash: Dict[str, str] = {}
+        self.materials_by_style: Dict[Tuple[str, float, str], str] = {}
 
-    entities: List[_Entity] = []
-    relations: List[_Relation] = []
-    used_ids: set[str] = set()
-
-    def unique_id(candidate: Optional[str], fallback_key: str) -> str:
-        if candidate and len(candidate) == 22 and candidate not in used_ids:
-            used_ids.add(candidate)
+    def unique_id(self, candidate: Optional[str], fallback_key: str) -> str:
+        if candidate and len(candidate) == 22 and candidate not in self.used_ids:
+            self.used_ids.add(candidate)
             return candidate
-        gid = _global_id(f"{model_name}:{fallback_key}")
-        while gid in used_ids:
+        gid = _global_id(f"{self.model_name}:{fallback_key}")
+        while gid in self.used_ids:
             fallback_key += "#"
-            gid = _global_id(f"{model_name}:{fallback_key}")
-        used_ids.add(gid)
+            gid = _global_id(f"{self.model_name}:{fallback_key}")
+        self.used_ids.add(gid)
         return gid
 
-    def add_rel(cls: str, relating: str, related: List[str], candidate_id: Optional[str] = None) -> None:
-        rid = unique_id(candidate_id, f"rel:{cls}:{relating}:{','.join(related)}")
-        relations.append(_Relation(id=rid, cls=cls, relating=relating, related=related))
+    def add_rel(self, cls: str, relating: str, related: List[str], candidate_id: Optional[str] = None) -> None:
+        rid = self.unique_id(candidate_id, f"rel:{cls}:{relating}:{','.join(related)}")
+        self.relations.append(_Relation(id=rid, cls=cls, relating=relating, related=related))
 
-    # 1. Spatial hierarchy: IfcProject -> IfcSite -> IfcBuilding -> IfcBuildingStorey
-    projects = ifc.by_type("IfcProject")
-    proj_ifc = projects[0] if projects else None
-    proj_id = unique_id(proj_ifc.GlobalId if proj_ifc else None, "project")
-    proj_name = (proj_ifc.Name if proj_ifc and proj_ifc.Name else model_name)
-    entities.append(_Entity(
-        id=proj_id,
-        cls="IfcProject",
-        name=proj_name,
-        predefined_type=None,
-        attrs={"lengthUnit": "METRE"},
-    ))
-
-    sites = ifc.by_type("IfcSite")
-    site_ifc = sites[0] if sites else None
-    site_id = unique_id(site_ifc.GlobalId if site_ifc else None, "site")
-    entities.append(_Entity(
-        id=site_id,
-        cls="IfcSite",
-        name=(site_ifc.Name if site_ifc and site_ifc.Name else "Site"),
-        predefined_type=None,
-        attrs={},
-    ))
-    add_rel("IfcRelAggregates", proj_id, [site_id])
-
-    buildings = ifc.by_type("IfcBuilding")
-    bld_ifc = buildings[0] if buildings else None
-    bld_id = unique_id(bld_ifc.GlobalId if bld_ifc else None, "building")
-    entities.append(_Entity(
-        id=bld_id,
-        cls="IfcBuilding",
-        name=(bld_ifc.Name if bld_ifc and bld_ifc.Name else "Building"),
-        predefined_type=None,
-        attrs={},
-    ))
-    add_rel("IfcRelAggregates", site_id, [bld_id])
-
-    storey_map: Dict[int, str] = {}
-    ifc_storeys = sorted(
-        ifc.by_type("IfcBuildingStorey"),
-        key=lambda s: float(getattr(s, "Elevation", 0.0) or 0.0),
-    )
-    storey_ids: List[str] = []
-    if not ifc_storeys:
-        default_storey_id = unique_id(None, "storey:Ground floor")
-        entities.append(_Entity(
-            id=default_storey_id,
-            cls="IfcBuildingStorey",
-            name="Ground floor",
+    def ensure_transparent_material(self, color: str, transparency: Optional[float], style_name: Optional[str]) -> Optional[str]:
+        if transparency is None:
+            return None
+        name = style_name or f"IFC {color[1:].upper()} {round(100 * (1 - transparency))}%"
+        key = (color.lower(), transparency, name)
+        if key in self.materials_by_style:
+            return self.materials_by_style[key]
+        mat_id = self.unique_id(None, f"material:{key[0]}:{key[1]}:{key[2]}")
+        self.materials_by_style[key] = mat_id
+        self.entities.append(_Entity(
+            id=mat_id,
+            cls="IfcMaterial",
+            name=name,
             predefined_type=None,
-            attrs={"elevation": 0.0, "height": 3.0},
+            attrs={"color": color.lower(), "transparency": transparency},
         ))
-        storey_ids.append(default_storey_id)
-    else:
-        elevations = [
-            round(float(getattr(s, "Elevation", 0.0) or 0.0) * unit_scale, 6)
-            for s in ifc_storeys
-        ]
-        for i, s in enumerate(ifc_storeys):
-            sid = unique_id(s.GlobalId, f"storey:{s.Name or i}")
+        return mat_id
+
+    def add_spatial_hierarchy(self, ifc: Any, unit_scale: float) -> Tuple[str, Dict[int, str], List[str]]:
+        proj_ifc = next(iter(ifc.by_type("IfcProject")), None)
+        proj_id = self.unique_id(proj_ifc.GlobalId if proj_ifc else None, "project")
+        proj_name = proj_ifc.Name if proj_ifc and proj_ifc.Name else self.model_name
+        self.entities.append(_Entity(proj_id, "IfcProject", proj_name, None, {"lengthUnit": "METRE"}))
+
+        site_ifc = next(iter(ifc.by_type("IfcSite")), None)
+        site_id = self.unique_id(site_ifc.GlobalId if site_ifc else None, "site")
+        self.entities.append(_Entity(site_id, "IfcSite", site_ifc.Name if site_ifc and site_ifc.Name else "Site", None, {}))
+        self.add_rel("IfcRelAggregates", proj_id, [site_id])
+
+        bld_ifc = next(iter(ifc.by_type("IfcBuilding")), None)
+        bld_id = self.unique_id(bld_ifc.GlobalId if bld_ifc else None, "building")
+        self.entities.append(_Entity(bld_id, "IfcBuilding", bld_ifc.Name if bld_ifc and bld_ifc.Name else "Building", None, {}))
+        self.add_rel("IfcRelAggregates", site_id, [bld_id])
+
+        storey_map, storey_ids = self._add_storeys(ifc, unit_scale)
+        self.add_rel("IfcRelAggregates", bld_id, storey_ids)
+        return proj_id, storey_map, storey_ids
+
+    def _add_storeys(self, ifc: Any, unit_scale: float) -> Tuple[Dict[int, str], List[str]]:
+        ifc_storeys = sorted(
+            ifc.by_type("IfcBuildingStorey"),
+            key=lambda s: float(getattr(s, "Elevation", 0.0) or 0.0),
+        )
+        if not ifc_storeys:
+            sid = self.unique_id(None, "storey:Ground floor")
+            self.entities.append(_Entity(sid, "IfcBuildingStorey", "Ground floor", None, {"elevation": 0.0, "height": 3.0}))
+            return {}, [sid]
+
+        elevations = [round(float(getattr(s, "Elevation", 0.0) or 0.0) * unit_scale, 6) for s in ifc_storeys]
+        storey_map: Dict[int, str] = {}
+        storey_ids: List[str] = []
+        for i, storey in enumerate(ifc_storeys):
+            sid = self.unique_id(storey.GlobalId, f"storey:{storey.Name or i}")
             elev = elevations[i]
             height = round(elevations[i + 1] - elev, 6) if i + 1 < len(elevations) else 3.0
             if height <= 0:
                 height = 3.0
-            entities.append(_Entity(
-                id=sid,
-                cls="IfcBuildingStorey",
-                name=s.Name or f"Level {i}",
-                predefined_type=None,
-                attrs={"elevation": elev, "height": height},
-            ))
-            storey_map[s.id()] = sid
+            self.entities.append(_Entity(sid, "IfcBuildingStorey", storey.Name or f"Level {i}", None, {"elevation": elev, "height": height}))
+            storey_map[storey.id()] = sid
             storey_ids.append(sid)
-    add_rel("IfcRelAggregates", bld_id, storey_ids)
-    fallback_storey_id = storey_ids[0]
+        return storey_map, storey_ids
 
-    # 2. Products -> LapinSharedBody + Element entities
-    settings = ifcopenshell.geom.settings()
-    settings.set(settings.USE_WORLD_COORDS, True)
-    iterator = ifcopenshell.geom.iterator(settings, ifc, max(1, (os.cpu_count() or 2) - 1))
+    def collect_products(self, ifc: Any, storey_map: Dict[int, str], storey_ids: Sequence[str]) -> int:
+        import ifcopenshell.geom
+        import ifcopenshell.util.element
 
-    shared_by_hash: Dict[str, str] = {}
-    contained_by_storey: Dict[str, List[str]] = {sid: [] for sid in storey_ids}
-    seen_keys: Dict[str, int] = {}
-    element_count = 0
+        settings = ifcopenshell.geom.settings()
+        settings.set(settings.USE_WORLD_COORDS, True)
+        iterator = ifcopenshell.geom.iterator(settings, ifc, max(1, (os.cpu_count() or 2) - 1))
 
-    if iterator.initialize():
-        while True:
-            shape = iterator.get()
-            product = ifc.by_id(shape.id)
-            verts = list(shape.geometry.verts)
-            faces = list(shape.geometry.faces)
-            if verts and faces and product.is_a("IfcElement"):
-                cls = product.is_a()
-                name = product.Name or cls[3:]
-                predefined = getattr(product, "PredefinedType", None)
-                container = ifcopenshell.util.element.get_container(product)
-                if container is not None and container.id() in storey_map:
-                    storey_id = storey_map[container.id()]
-                else:
-                    storey_id = fallback_storey_id
+        contained_by_storey: Dict[str, List[str]] = {sid: [] for sid in storey_ids}
+        seen_keys: Dict[str, int] = {}
+        element_count = 0
+        fallback_storey_id = storey_ids[0]
 
-                key = f"{storey_id}/{cls}/{name}"
-                seen_keys[key] = seen_keys.get(key, 0) + 1
-                if seen_keys[key] > 1:
-                    key = f"{key}#{seen_keys[key]}"
+        if iterator.initialize():
+            while True:
+                shape = iterator.get()
+                product = ifc.by_id(shape.id)
+                verts = list(shape.geometry.verts)
+                faces = list(shape.geometry.faces)
+                if verts and faces and product.is_a("IfcElement") and not product.is_a("IfcOpeningElement"):
+                    elem_id, storey_id = self._append_product(
+                        product, shape.geometry, verts, faces,
+                        ifcopenshell.util.element.get_container(product),
+                        storey_map, fallback_storey_id, seen_keys,
+                    )
+                    contained_by_storey[storey_id].append(elem_id)
+                    element_count += 1
+                if not iterator.next():
+                    break
 
-                color = _extract_color(shape.geometry)
-                stored, content_hash = _encode_stored_body(verts, faces, color=color)
-                shared_id = shared_by_hash.get(content_hash)
-                if shared_id is None:
-                    shared_id = unique_id(None, f"shared:{content_hash}")
-                    shared_by_hash[content_hash] = shared_id
-                    entities.append(_Entity(
-                        id=shared_id,
-                        cls="LapinSharedBody",
-                        name="Shared body",
-                        predefined_type=None,
-                        attrs={"body": stored, "contentHash": content_hash},
-                    ))
+        for sid, elem_ids in contained_by_storey.items():
+            if elem_ids:
+                self.add_rel("IfcRelContainedInSpatialStructure", sid, elem_ids)
+        return element_count
 
-                elem_id = unique_id(getattr(product, "GlobalId", None), f"elem:{key}")
-                entities.append(_Entity(
-                    id=elem_id,
-                    cls=cls,
-                    name=name,
-                    predefined_type=predefined if isinstance(predefined, str) else None,
-                    attrs={
-                        "bodyOf": shared_id,
-                        "xf": list(_IDENTITY_XF),
-                        "owner": f"lite-step:{model_name}",
-                        "externalAttrs": {"liteStep": key},
-                    },
-                    storey_id=storey_id,
-                ))
-                contained_by_storey[storey_id].append(elem_id)
-                element_count += 1
-            if not iterator.next():
-                break
+    def _append_product(
+        self,
+        product: Any,
+        shape_geometry: Any,
+        verts: List[float],
+        faces: List[int],
+        container: Any,
+        storey_map: Dict[int, str],
+        fallback_storey_id: str,
+        seen_keys: Dict[str, int],
+    ) -> Tuple[str, str]:
+        cls = product.is_a()
+        name = product.Name or cls[3:]
+        predefined = getattr(product, "PredefinedType", None)
+        storey_id = storey_map[container.id()] if container is not None and container.id() in storey_map else fallback_storey_id
 
-    for sid, elem_ids in contained_by_storey.items():
-        if elem_ids:
-            add_rel("IfcRelContainedInSpatialStructure", sid, elem_ids)
+        key = f"{storey_id}/{cls}/{name}"
+        seen_keys[key] = seen_keys.get(key, 0) + 1
+        if seen_keys[key] > 1:
+            key = f"{key}#{seen_keys[key]}"
 
-    # 3. Extract param() declarations -> source/parametric.json + starter LapinScript
+        color, transparency, style_name = _extract_style(shape_geometry)
+        mat_id = self.ensure_transparent_material(color, transparency, style_name)
+        stored, content_hash = _encode_stored_body(verts, faces, color=color, material_id=mat_id)
+        shared_id = self.shared_by_hash.get(content_hash)
+        if shared_id is None:
+            shared_id = self.unique_id(None, f"shared:{content_hash}")
+            self.shared_by_hash[content_hash] = shared_id
+            self.entities.append(_Entity(
+                id=shared_id,
+                cls="LapinSharedBody",
+                name="Shared body",
+                predefined_type=None,
+                attrs={"body": stored, "contentHash": content_hash},
+            ))
+
+        elem_id = self.unique_id(getattr(product, "GlobalId", None), f"elem:{key}")
+        self.entities.append(_Entity(
+            id=elem_id,
+            cls=cls,
+            name=name,
+            predefined_type=predefined if isinstance(predefined, str) else None,
+            attrs={
+                "bodyOf": shared_id,
+                "xf": list(_IDENTITY_XF),
+                "owner": f"lite-step:{self.model_name}",
+                "externalAttrs": {"liteStep": key},
+            },
+            storey_id=storey_id,
+        ))
+        return elem_id, storey_id
+
+
+def _extract_param_script(
+    builder: _PackageBuilder,
+    source_path: Optional[Path],
+    proj_id: str,
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, bytes, str]]]:
     params_meta: List[Dict[str, Any]] = []
     if source_path is not None and source_path.suffix.lower() == ".py" and source_path.is_file():
         from lite_step.params import read_params
@@ -438,11 +438,11 @@ def build_lapin_package(
 
     script_texts: List[Tuple[str, bytes, str]] = []
     if params_meta:
-        script_name = f"{_safe_segment(model_name)}_params.py"
-        script_code = _starter_script_code(model_name, params_meta)
+        script_name = f"{_safe_segment(builder.model_name)}_params.py"
+        script_code = _starter_script_code(builder.model_name, params_meta)
         script_bytes = script_code.encode("utf-8")
-        script_id = unique_id(None, f"script:{script_name}")
-        entities.append(_Entity(
+        script_id = builder.unique_id(None, f"script:{script_name}")
+        builder.entities.append(_Entity(
             id=script_id,
             cls="LapinScript",
             name=script_name,
@@ -451,75 +451,20 @@ def build_lapin_package(
                 "code": script_code,
                 "language": "python",
                 "sha256": _sha256_hex(script_bytes),
-                "description": f"Lite-STEP parameters for {model_name}",
+                "description": f"Lite-STEP parameters for {builder.model_name}",
             },
         ))
         script_texts.append((f"scripts/{script_name}", script_bytes, "scripting"))
+    return params_meta, script_texts
 
-    # 4. Build Arrow IPC parts & manifest
-    order_of: Dict[str, int] = {}
-    for idx, e in enumerate(entities):
-        order_of[e.id] = idx
-    for idx, r in enumerate(relations):
-        order_of[r.id] = idx
 
-    parts: List[Tuple[Dict[str, Any], bytes]] = []
-    classes: Dict[str, str] = {}
-
-    doc_bytes = b"{}"
-    parts.append(({"path": "project/document.json", "sha256": _sha256_hex(doc_bytes), "size": len(doc_bytes)}, doc_bytes))
-
-    grouped: Dict[Tuple[str, str, str], List[_Entity]] = {}
-    for e in entities:
-        mod = _module_of(e.cls)
-        classes[e.cls] = mod
-        grouped.setdefault((mod, e.cls, e.storey_id or "_"), []).append(e)
-
-    for (mod, cls, storey), chunk in sorted(grouped.items()):
-        part_path = f"model/{_safe_segment(mod)}/{_safe_segment(cls)}/{_safe_segment(storey)}.arrow"
-        raw = _serialize_entities(chunk, order_of)
-        parts.append((
-            {"path": part_path, "sha256": _sha256_hex(raw), "size": len(raw), "module": mod},
-            raw,
-        ))
-
-    rel_bytes = _serialize_relations(relations, order_of)
-    parts.append(({"path": "model/relations.arrow", "sha256": _sha256_hex(rel_bytes), "size": len(rel_bytes)}, rel_bytes))
-
-    for text_path, text_bytes, mod in sorted(script_texts, key=lambda x: x[0]):
-        parts.append((
-            {"path": text_path, "sha256": _sha256_hex(text_bytes), "size": len(text_bytes), "module": mod},
-            text_bytes,
-        ))
-
-    foreign_entries: List[Tuple[Dict[str, Any], bytes]] = []
-    if params_meta:
-        ir_doc = {
-            "version": 1,
-            "model": model_name,
-            "params": params_meta,
-        }
-        ir_bytes = (json.dumps(ir_doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-        foreign_entries.append((
-            {"path": "source/parametric.json", "sha256": _sha256_hex(ir_bytes), "size": len(ir_bytes)},
-            ir_bytes,
-        ))
-
-    modules_list = [{"id": m, "schemaVersion": 1} for m in sorted({*classes.values(), "core"})]
-    manifest: Dict[str, Any] = {
-        "format": _FORMAT,
-        "version": _VERSION,
-        "app": _APP,
-        "product": _PRODUCT,
-        "modules": modules_list,
-        "parts": [p for p, _ in parts],
-        "classes": dict(sorted(classes.items())),
-    }
-    if foreign_entries:
-        manifest["foreign"] = [f for f, _ in foreign_entries]
-
+def _write_lapin_zip(
+    output_path: Path,
+    manifest: Dict[str, Any],
+    parts: List[Tuple[Dict[str, Any], bytes]],
+    foreign_entries: List[Tuple[Dict[str, Any], bytes]],
+) -> None:
     manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = output_path.with_name(output_path.name + ".saving")
     try:
@@ -535,10 +480,75 @@ def build_lapin_package(
             temp_path.unlink()
         raise
 
+
+def build_lapin_package(
+    ifc_path: Path,
+    output_path: Path,
+    source_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Convert a compiled IFC4X3 file (and optional Lite-STEP `.py` source) to a Format 3 `.lapin` zip."""
+    import ifcopenshell
+    import ifcopenshell.util.unit
+
+    ifc = ifcopenshell.open(str(ifc_path))
+    model_name = source_path.stem if source_path is not None else ifc_path.stem
+    unit_scale = float(ifcopenshell.util.unit.calculate_unit_scale(ifc) or 1.0)
+
+    builder = _PackageBuilder(model_name)
+    proj_id, storey_map, storey_ids = builder.add_spatial_hierarchy(ifc, unit_scale)
+    element_count = builder.collect_products(ifc, storey_map, storey_ids)
+    params_meta, script_texts = _extract_param_script(builder, source_path, proj_id)
+
+    order_of: Dict[str, int] = {e.id: idx for idx, e in enumerate(builder.entities)}
+    for idx, rel in enumerate(builder.relations):
+        order_of[rel.id] = idx
+
+    parts: List[Tuple[Dict[str, Any], bytes]] = []
+    classes: Dict[str, str] = {}
+
+    doc_bytes = b"{}"
+    parts.append(({"path": "project/document.json", "sha256": _sha256_hex(doc_bytes), "size": len(doc_bytes)}, doc_bytes))
+
+    grouped: Dict[Tuple[str, str, str], List[_Entity]] = {}
+    for entity in builder.entities:
+        mod = _module_of(entity.cls)
+        classes[entity.cls] = mod
+        grouped.setdefault((mod, entity.cls, entity.storey_id or "_"), []).append(entity)
+
+    for (mod, cls, storey), chunk in sorted(grouped.items()):
+        part_path = f"model/{_safe_segment(mod)}/{_safe_segment(cls)}/{_safe_segment(storey)}.arrow"
+        raw = _serialize_entities(chunk, order_of)
+        parts.append(({"path": part_path, "sha256": _sha256_hex(raw), "size": len(raw), "module": mod}, raw))
+
+    rel_bytes = _serialize_relations(builder.relations, order_of)
+    parts.append(({"path": "model/relations.arrow", "sha256": _sha256_hex(rel_bytes), "size": len(rel_bytes)}, rel_bytes))
+
+    for text_path, text_bytes, mod in sorted(script_texts, key=lambda x: x[0]):
+        parts.append(({"path": text_path, "sha256": _sha256_hex(text_bytes), "size": len(text_bytes), "module": mod}, text_bytes))
+
+    foreign_entries: List[Tuple[Dict[str, Any], bytes]] = []
+    if params_meta:
+        ir_bytes = (json.dumps({"version": 1, "model": model_name, "params": params_meta}, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        foreign_entries.append(({"path": "source/parametric.json", "sha256": _sha256_hex(ir_bytes), "size": len(ir_bytes)}, ir_bytes))
+
+    manifest: Dict[str, Any] = {
+        "format": _FORMAT,
+        "version": _VERSION,
+        "app": _APP,
+        "product": _PRODUCT,
+        "modules": [{"id": m, "schemaVersion": 1} for m in sorted({*classes.values(), "core"})],
+        "parts": [p for p, _ in parts],
+        "classes": dict(sorted(classes.items())),
+    }
+    if foreign_entries:
+        manifest["foreign"] = [f for f, _ in foreign_entries]
+
+    _write_lapin_zip(output_path, manifest, parts, foreign_entries)
+
     return {
         "path": str(output_path),
         "elements": element_count,
-        "sharedBodies": len(shared_by_hash),
+        "sharedBodies": len(builder.shared_by_hash),
         "storeys": len(storey_ids),
         "params": len(params_meta),
     }

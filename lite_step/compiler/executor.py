@@ -1123,6 +1123,16 @@ def compile_main(
             # Optional — absence means generate mode (no global declared).
             base_ifc = caller_globals.get("base_ifc")
 
+    fmt = (format or ("lapin" if str(output_name).lower().endswith(".lapin") else "ifc")).lower()
+    if fmt not in ("ifc", "lapin"):
+        raise ValueError(f"Unsupported format {format!r}; expected 'ifc' or 'lapin'.")
+    effective_output = "output.lapin" if fmt == "lapin" and output_name == "output.ifc" else output_name
+    out_suffix = Path(effective_output).suffix.lower()
+    if fmt == "ifc" and out_suffix == ".lapin":
+        raise ValueError(f"Output path {output_name!r} uses '.lapin' extension with format='ifc'.")
+    if fmt == "lapin" and out_suffix == ".ifc":
+        raise ValueError(f"Output path {output_name!r} uses '.ifc' extension with format='lapin'.")
+
     if not isinstance(result, Project):
         raise TypeError(
             f"compile_main expects a Project, got {type(result).__name__}. "
@@ -1260,11 +1270,6 @@ def compile_main(
         print(f"checked {Path(source_path).name} — "
               f"{len(ifc_result.ifc_content)} bytes of IFC, not written")
         return None
-
-    fmt = (format or ("lapin" if str(output_name).lower().endswith(".lapin") else "ifc")).lower()
-    if fmt not in ("ifc", "lapin"):
-        raise ValueError(f"Unsupported format {format!r}; expected 'ifc' or 'lapin'.")
-    effective_output = "output.lapin" if fmt == "lapin" and output_name == "output.ifc" else output_name
 
     out_arg = Path(effective_output)
     if out_arg.is_absolute():

@@ -5,6 +5,7 @@ This directory contains editor and CAD extensions for working with **Lite-STEP**
 - **[Blender Extension](blender/)**: Live synchronization bridge for Blender (5.0+) with Bonsai and PBR presentation rendering.
 - **[VS Code Extension](vscode/)**: Authoring, compilation, 3D preview, and multi-target push synchronization for Lite-STEP DSL files (`.py`).
 - **[Lapin](lapin/)**: Lite-STEP models in [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller: push a model in, and keep it up to date as the script changes.
+- **[6-Axis Renderer](render/)**: Headless ThatOpen (`IfcImporter` + `FragmentsManager` with `LodMode.ALL_VISIBLE`) renderer outputting 6 cardinal/aerial PNG views of any compiled `.ifc`.
 
 ---
 
