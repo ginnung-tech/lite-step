@@ -61,7 +61,7 @@ jobs:
         # directly and needs neither lite_step's dependencies nor its conftest.
         run: |
           pip install --only-binary :all: --require-hashes -r tools/requirements-test.txt
-          python -m pytest lite_step/tests/test_tools_blender_bridge.py -q --noconftest -p no:cacheprovider -o filterwarnings=
+          python -c "import pathlib, sys, types, pytest; [setattr(sys.modules.setdefault(k, types.ModuleType(k)), '__path__', [str(pathlib.Path(p).resolve())]) for k, p in (('lite_step', 'lite_step'), ('lite_step.tests', 'lite_step/tests'))]; sys.exit(pytest.main(['lite_step/tests/test_tools_blender_bridge.py', '-q', '--noconftest', '-p', 'no:cacheprovider', '-o', 'filterwarnings=']))"
 
       - name: Test the connection rules (VS Code extension)
         working-directory: tools/vscode
