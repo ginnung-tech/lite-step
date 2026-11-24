@@ -7,8 +7,11 @@ because the questions that matter are rarely the ones a fixed command foresaw. C
 - `fit`: cameras from control points (ortho least squares, perspective PnP), refinement, chamfer.
 - `ink`: ink masks from drawings, silhouette profiles in metres.
 - `overlay`: the model drawn on a source, and the agreement map shown to the person.
+- `scene`, `drone`: the model as triangles per element, and the ray-cast ID buffer through any camera.
+- `inspect`: a round of minions over the survey's shots (`python -m tools.survey inspect`).
 
-Optional dependency: OpenCV (`pip install -r tools/survey/requirements.txt`).
+Optional dependencies: OpenCV, Open3D (`pip install -r tools/survey/requirements.txt`). `scene`, `drone` and
+`inspect` are imported on use, so the camera and fitting tools work without Open3D.
 """
 
 from .camera import OrthoCamera, PerspectiveCamera, basis, camera_from_contract

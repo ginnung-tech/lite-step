@@ -138,7 +138,33 @@ rows = silhouette_profile(ink_mask(gray, min_stroke_px=120), fit.camera, (-38.6,
 ```
 
 Fit from control points first, then refine against the model: a silhouette-only search can settle in a
-wrong pose. CPU only, no network. Tests: `lite_step/tests/test_tools_survey.py`.
+wrong pose. CPU only, no network. Tests: `lite_step/tests/test_tools_survey.py`,
+`test_tools_survey_inspect.py`.
+
+### Inspecting: a round of minions
+
+```bash
+python -m tools.survey inspect --workdir . --n 12 --model output.ifc --model-version 12 [--shots a b] [--workers 8]
+python -m tools.survey inspect --workdir . --request survey/rounds/12/request.json
+```
+
+Reads only the working directory (the model, and `survey/` with `sources.json`, `cameras.json`, `shots.json`
+and the ink masks `ink/{source}.png`, class 1 = structure) and writes only `survey/rounds/{n}/`: per shot a
+report (precision, recall, per element group its support and the shift that would line it up, ink the model
+lacks as world boxes) and a WebP overlay, then `consensus.json` (only what two sources agree on) and
+`round.json` last. A round that cannot run is written as `status: failed` with its error. One process per
+core; the scene is tessellated once per model file and cached by its hash. Shapes: the Ginnung `survey`
+contract, 1.1.
+
+| Module | What it does |
+| --- | --- |
+| `scene` | the model as triangles per element (ifcopenshell), with the aggregation tree; cached |
+| `drone` | the ID buffer and depth through any survey camera (Open3D ray casting); sections by depth range |
+| `inspect` | `diff_shot`, `consensus`, `scores`, `run_round` |
+
+On the Eiffel run (306 shots, v12) it reproduces the earlier minion's ink-weighted F (0.7995 against 0.7996,
+median shot within 0.002) in 36 s on 10 processes once the scene is cached; tessellating the 4.9 MB model is
+the larger cost (about 70 s).
 
 ---
 
