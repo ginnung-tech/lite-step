@@ -141,6 +141,26 @@ Fit from control points first, then refine against the model: a silhouette-only 
 wrong pose. CPU only, no network. Tests: `lite_step/tests/test_tools_survey.py`,
 `test_tools_survey_inspect.py`.
 
+### Taking pictures in
+
+```bash
+python -m tools.survey add --workdir . --picture files/view.png --kind viewer_screenshot --title "North face" --bcfv files/view.bcfv
+python -m tools.survey add --workdir . --picture files/site.jpg --kind photo --title "Site" --points pts.json [--model output.ifc]
+python -m tools.survey index --workdir .
+```
+
+`add` copies the picture into `survey/sources/` (the same bytes twice are one source), lists it in
+`sources.json`, and fits a camera: a viewer screenshot by the BCF viewpoint it was taken from, anything else
+from four or more control points (`[{"px": [x, y], "world": [x, y, z], "by": "surveyor"}]`). Every fit is a new
+camera version in `cameras.json` carrying its evidence: `overlay` (the picture with the model's outline in
+red, control points green where the picture has them, ringed where the camera puts them) and `agreement`
+(share of model pixels within 2 px of the picture). A fit under its gate (80 % for a viewer screenshot, 4 px
+mean for control points) is recorded as failed and leaves an `align` question in `survey/questions/`; the
+camera is never nudged until it passes. Text and illustrative pictures are listed, not fitted. It prints the
+answer for that picture as one JSON line. `index` writes `survey/index.json` (every file but `rounds/`, with
+size and sha256): last, after the files are kept. The Surveyor's instructions: `agents/surveyor/SKILL.md`.
+Tests: `test_tools_survey_intake.py`.
+
 ### Inspecting: a round of minions
 
 ```bash
