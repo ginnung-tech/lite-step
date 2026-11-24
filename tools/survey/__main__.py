@@ -70,45 +70,56 @@ def _now() -> str:
 
 
 def _add(args) -> int:
-    """One picture in; prints the intake's answer for it (groa-cli SurveyIntakeResult, one source)."""
-    from .intake import IntakeError, add_source, ask_align, camera_from_bcfv, fit_points, fit_viewer, no_fit
+    """One picture in; prints the intake's answer for it (groa-cli SurveyIntakeResult, one source).
 
-    wd = Path(args.workdir)
+    Every path is inside the working directory: the picture, the viewpoint, the points and the model."""
+    from .intake import add_source, confined
+
+    wd = Path(args.workdir).resolve()
     now = _now()
     try:
-        cam = None
-        if args.bcfv:
-            import cv2
-
-            img = cv2.imread(args.picture)
-            if img is None:
-                raise IntakeError(f"{args.picture} is not a picture OpenCV can read")
-            cam = camera_from_bcfv(Path(args.bcfv).read_text(encoding="utf-8"), img.shape[1], img.shape[0])
-        src = add_source(wd, args.picture, kind=args.kind, title=args.title, now=now, convention=args.convention,
+        picture = confined(wd, args.picture)
+        cam = _viewer_camera(confined(wd, args.bcfv), picture) if args.bcfv else None
+        src = add_source(wd, picture, kind=args.kind, title=args.title, now=now, convention=args.convention,
                          origin=args.origin, added_by=args.by, source_id=args.source_id, viewer_camera=cam,
                          illustrative=args.illustrative)
-        if src["kind"] == "text" or src.get("illustrative"):
-            result = no_fit(wd, src["id"])
-        elif src["kind"] == "viewer_screenshot" or args.points:
-            from .scene import Scene
-
-            model = wd / args.model
-            scene = Scene.from_ifc(model) if model.exists() else None
-            if src["kind"] == "viewer_screenshot":
-                if scene is None:
-                    raise IntakeError(f"no model at {args.model} to fit the screenshot against")
-                result = fit_viewer(wd, src["id"], scene, now=now)
-            else:
-                pts = json.loads(Path(args.points).read_text(encoding="utf-8"))
-                result = fit_points(wd, src["id"], pts, now=now, scene=scene)
-        else:
-            ask_align(wd, src["id"], now=now)
-            result = {"id": src["id"], "sha256": src["sha256"], "fit": "failed"}
-    except (IntakeError, ValueError, OSError) as e:
+        result = _fit(wd, src, args, now)
+    except (ValueError, OSError) as e:  # IntakeError is a ValueError
         print(json.dumps({"error": str(e)}))
         return 2
     print(json.dumps(result))
     return 0
+
+
+def _viewer_camera(bcfv: Path, picture: Path) -> dict:
+    import cv2
+
+    from .intake import IntakeError, camera_from_bcfv
+
+    img = cv2.imread(str(picture))
+    if img is None:
+        raise IntakeError(f"{picture.name} is not a picture OpenCV can read")
+    return camera_from_bcfv(bcfv.read_text(encoding="utf-8"), img.shape[1], img.shape[0])
+
+
+def _fit(wd: Path, src: dict, args, now: str) -> dict:
+    from .intake import IntakeError, ask_align, confined, fit_points, fit_viewer, no_fit
+
+    if src["kind"] == "text" or src.get("illustrative"):
+        return no_fit(wd, src["id"])
+    if src["kind"] != "viewer_screenshot" and not args.points:
+        ask_align(wd, src["id"], now=now)
+        return {"id": src["id"], "sha256": src["sha256"], "fit": "failed"}
+    from .scene import Scene
+
+    model = confined(wd, args.model)
+    scene = Scene.from_ifc(model) if model.exists() else None
+    if src["kind"] == "viewer_screenshot":
+        if scene is None:
+            raise IntakeError(f"no model at {args.model} to fit the screenshot against")
+        return fit_viewer(wd, src["id"], scene, now=now)
+    pts = json.loads(confined(wd, args.points).read_text(encoding="utf-8"))
+    return fit_points(wd, src["id"], pts, now=now, scene=scene)
 
 
 if __name__ == "__main__":

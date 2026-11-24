@@ -177,3 +177,19 @@ def test_the_cli_takes_text_in_without_fitting_and_says_why_it_refuses(tmp_path,
                  "--title", "x"]) == 2
     assert "viewer's camera" in json.loads(capsys.readouterr().out)["error"]
     assert main(["index", "--workdir", str(tmp_path)]) == 0
+
+
+def test_no_path_leaves_the_working_directory(tmp_path, capsys):
+    wd = tmp_path / "wd"
+    pic = screenshot(wd)
+    add_source(wd, pic, kind="photo", title="Photo", now=NOW)
+    sources = json.loads((wd / "survey/sources.json").read_text(encoding="utf-8"))
+    sources["sources"][0]["file"] = "../../outside.png"  # a sources.json edited by hand, or by a confused agent
+    (wd / "survey/sources.json").write_text(json.dumps(sources), encoding="utf-8")
+    screenshot(tmp_path, name="outside.png")
+    pts = [{"px": CAM.project([w])[0].tolist(), "world": w, "by": "surveyor"} for w in corners()]
+    with pytest.raises(IntakeError, match="outside"):
+        fit_points(wd, "grab", pts, now=NOW)
+    assert main(["add", "--workdir", str(wd), "--picture", str(tmp_path / "outside.png"), "--kind", "photo",
+                 "--title", "x"]) == 2
+    assert "outside" in json.loads(capsys.readouterr().out)["error"]

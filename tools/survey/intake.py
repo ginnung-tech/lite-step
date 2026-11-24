@@ -43,6 +43,8 @@ POINTS_GATE_PX = 4.0
 PICTURE_KINDS = ("elevation", "plan", "section", "detail_plane", "perspective", "photo", "viewer_screenshot",
                  "screenshot", "sketch")
 _ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SOURCES = "sources.json"
+CAMERAS = "cameras.json"
 
 
 class IntakeError(ValueError):
@@ -50,7 +52,23 @@ class IntakeError(ValueError):
 
 
 def survey_dir(workdir: str | Path) -> Path:
-    return Path(workdir) / "survey"
+    return Path(workdir).resolve() / "survey"
+
+
+def confined(base: str | Path, rel: str | Path) -> Path:
+    """`rel` under `base`, resolved; refused if it leaves `base` (a path read from a file or given on the
+    command line never reaches outside the working directory)."""
+    root = Path(base).resolve()
+    p = (root / rel).resolve()
+    if not p.is_relative_to(root):
+        raise IntakeError(f"{rel} is outside {root.name}/")
+    return p
+
+
+def _check_id(source_id: str) -> str:
+    if not _ID.match(source_id):
+        raise IntakeError(f"source id {source_id!r} must match {_ID.pattern}")
+    return source_id
 
 
 def _read(path: Path, key: str) -> dict:
@@ -161,19 +179,13 @@ def add_source(workdir: str | Path, picture: str | Path, *, kind: str, title: st
     if kind == "viewer_screenshot" and viewer_camera is None:
         raise IntakeError("a viewer screenshot needs the viewer's camera")
     s = survey_dir(workdir)
-    table = _read(s / "sources.json", "sources")
+    table = _read(s / SOURCES, "sources")
     digest = sha256_of(pic)
     for e in table["sources"]:
         if e.get("sha256") == digest:
             return e
-    taken = {e["id"] for e in table["sources"]}
-    base = source_id or _slug(pic.name)
-    if not _ID.match(base):
-        raise IntakeError(f"source id {base!r} must match {_ID.pattern}")
-    sid, n = base, 2
-    while sid in taken:
-        sid, n = f"{base[:60]}-{n}", n + 1
-    dest = s / "sources" / f"{sid}{pic.suffix.lower() or '.bin'}"
+    sid = _unique_id({e["id"] for e in table["sources"]}, _check_id(source_id or _slug(pic.name)))
+    dest = confined(s, f"sources/{sid}{pic.suffix.lower() or '.bin'}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(pic, dest)
     entry: dict[str, Any] = {
@@ -181,16 +193,29 @@ def add_source(workdir: str | Path, picture: str | Path, *, kind: str, title: st
         "convention": "none" if kind == "text" else (convention or _default_convention(kind)),
         "title": (title or pic.name)[:300], "addedBy": added_by, "addedAt": now,
     }
-    if origin:
-        entry["origin"] = origin[:500]
-    if viewer_camera is not None:
-        entry["viewerCamera"] = viewer_camera
-    if illustrative:
-        entry["illustrative"] = True
+    entry.update(_optional(origin, viewer_camera, illustrative))
     table["version"] = VERSION
     table["sources"].append(entry)
-    _write(s / "sources.json", table)
+    _write(s / SOURCES, table)
     return entry
+
+
+def _unique_id(taken: set[str], base: str) -> str:
+    sid, n = base, 2
+    while sid in taken:
+        sid, n = f"{base[:60]}-{n}", n + 1
+    return sid
+
+
+def _optional(origin: str | None, viewer_camera: dict | None, illustrative: bool) -> dict:
+    out: dict[str, Any] = {}
+    if origin:
+        out["origin"] = origin[:500]
+    if viewer_camera is not None:
+        out["viewerCamera"] = viewer_camera
+    if illustrative:
+        out["illustrative"] = True
+    return out
 
 
 def _default_convention(kind: str) -> str:
@@ -199,7 +224,7 @@ def _default_convention(kind: str) -> str:
 
 
 def _source(workdir: Path, source_id: str) -> dict:
-    for e in _read(survey_dir(workdir) / "sources.json", "sources")["sources"]:
+    for e in _read(survey_dir(workdir) / SOURCES, "sources")["sources"]:
         if e["id"] == source_id:
             return e
     raise IntakeError(f"no source {source_id!r} in sources.json")
@@ -230,8 +255,8 @@ def _save_overlay(workdir: Path, source_id: str, version: int, img: np.ndarray, 
         cv2.circle(out, tuple(int(round(v)) for v in measured), 5, (80, 170, 60), -1, cv2.LINE_AA)
         if np.all(np.isfinite(projected)):
             cv2.circle(out, tuple(int(round(v)) for v in projected), 9, (40, 40, 220), 2, cv2.LINE_AA)
-    rel = f"sources/{source_id}.fit-v{version}.png"
-    path = survey_dir(workdir) / rel
+    rel = f"sources/{_check_id(source_id)}.fit-v{int(version)}.png"
+    path = confined(survey_dir(workdir), rel)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), out):
         raise IntakeError(f"could not write {rel}")
@@ -244,10 +269,10 @@ def _next_version(cams: dict, source_id: str) -> int:
 
 def _record(workdir: Path, cam_entry: dict) -> None:
     s = survey_dir(workdir)
-    cams = _read(s / "cameras.json", "cameras")
+    cams = _read(s / CAMERAS, "cameras")
     cams["version"] = VERSION
     cams["cameras"].append(cam_entry)
-    _write(s / "cameras.json", cams)
+    _write(s / CAMERAS, cams)
 
 
 def _result(source: dict, cam_entry: dict) -> dict:
@@ -273,13 +298,13 @@ def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: fl
     src = _source(wd, source_id)
     if src["kind"] != "viewer_screenshot":
         raise IntakeError(f"{source_id} is a {src['kind']}, not a viewer screenshot")
-    img = _read_image(survey_dir(wd) / src["file"])
+    img = _read_image(confined(survey_dir(wd), src["file"]))
     h, w = img.shape[:2]
     camd = dict(src["viewerCamera"], imageW=w, imageH=h)  # the picture's pixels are the truth about its size
     cam = PerspectiveCamera.from_contract(camd)
     hit = Drone(scene).render(cam).hit
     a = agreement(background_mask(img), hit, tol_px=TOL_PX)
-    cams = _read(survey_dir(wd) / "cameras.json", "cameras")
+    cams = _read(survey_dir(wd) / CAMERAS, "cameras")
     version = _next_version(cams, source_id)
     passed = bool(hit.any()) and a.model_within_px >= gate
     entry = {"source": source_id, "version": version, "camera": camd, "method": "viewer", "residualMm": 0.0,
@@ -303,7 +328,7 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
     src = _source(wd, source_id)
     if src["kind"] == "text" or src.get("illustrative"):
         raise IntakeError(f"{source_id} is not a picture to fit")
-    img = _read_image(survey_dir(wd) / src["file"])
+    img = _read_image(confined(survey_dir(wd), src["file"]))
     h, w = img.shape[:2]
     world = np.array([p["world"] for p in points], dtype=np.float64)
     px = np.array([p["px"] for p in points], dtype=np.float64)
@@ -323,7 +348,7 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
         a = agreement(background_mask(img), hit, tol_px=TOL_PX)
         agree = {"tolPx": TOL_PX, "modelWithinPx": round(a.model_within_px, 4),
                  "sourceWithinPx": round(a.source_within_px, 4)}
-    cams = _read(survey_dir(wd) / "cameras.json", "cameras")
+    cams = _read(survey_dir(wd) / CAMERAS, "cameras")
     version = _next_version(cams, source_id)
     passed = f.residual_px <= gate_px
     entry: dict[str, Any] = {
@@ -347,7 +372,7 @@ def ask_align(workdir: str | Path, source_id: str, *, now: str, question: str | 
               points: int = 4) -> dict:
     """An `align` question for a picture that could not be fitted: the person clicks `points` points on the
     picture and the same points on the model (contract survey-question)."""
-    q = {"version": "1.0", "id": f"q-align-{source_id}"[:64], "kind": "align", "blocking": False, "askedAt": now,
+    q = {"version": "1.0", "id": f"q-align-{_check_id(source_id)}"[:64], "kind": "align", "blocking": False, "askedAt": now,
          "question": question or (f"I could not line the model up with this picture. Please click {points} points "
                                   "on it, then the same points on the model."),
          "source": source_id, "points": points}
