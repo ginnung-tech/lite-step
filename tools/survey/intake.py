@@ -83,8 +83,10 @@ def _read(path: Path, key: str) -> dict:
 def _write(path: Path, obj: Any) -> None:
     """Whole file or nothing: a reader never sees half a table."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2)
+        f.write("\n")
     os.replace(tmp, path)
 
 
