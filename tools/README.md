@@ -5,6 +5,7 @@ This directory contains editor and CAD extensions for working with **Lite-STEP**
 - **[Blender Extension](blender/)**: Live synchronization bridge for Blender (5.0+) with Bonsai and PBR presentation rendering.
 - **[VS Code Extension](vscode/)**: Authoring, compilation, 3D preview, and multi-target push synchronization for Lite-STEP DSL files (`.py`).
 - **[Lapin](lapin/)**: Lite-STEP models in [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller: push a model in, and keep it up to date as the script changes.
+- **[Survey](survey/)**: snap drawings, screenshots and photos to cameras and measure them against a model (a library for the Surveyor's own scripts).
 - **[6-Axis Renderer](render/)**: Headless ThatOpen (`IfcImporter` + `FragmentsManager` with `LodMode.ALL_VISIBLE`) renderer outputting 6 cardinal/aerial PNG views of any compiled `.ifc`.
 
 ---
@@ -109,6 +110,35 @@ ROOF_SLAB_THICK = param(250, "mm", "Roof slab thickness")
 - `lite-step lapin push model.py --watch` does that by itself, then compiles and reloads, so the model in Lapin follows the parameter in a few seconds.
 
 The script wins a conflict: a push overwrites a value changed in Lapin that was not pulled, and says so. A parameter whose value the script computes (`param(WIDTH * 2, ...)`) is not published. A whole number stays whole: 400.5 for a millimetre parameter is refused, not rounded. Lapin keeps a few keys for its own project fields (`NAME`, for one): such a parameter is reported and not published; rename the constant.
+
+---
+
+## 3b. Survey (`tools/survey`)
+
+A library for checking a model against its sources: drawings, screenshots, photos. Every source gets a
+camera, measurements are read from the source through that camera, and the model is drawn back onto the
+source so a person can see it. It is a library first because the useful questions are rarely the ones a
+fixed command foresaw: the Surveyor (or any coding agent) writes short scripts on top of it.
+
+```bash
+pip install -r tools/survey/requirements.txt   # OpenCV; numpy comes with Lite-STEP
+```
+
+| Module | What it does |
+| --- | --- |
+| `camera` | `OrthoCamera` (`px = ax + k*s*u`, `py = c - s*v`, separate horizontal stretch `k`) and `PerspectiveCamera` (BCF eye, direction, up, vertical field of view); projection both ways; contract shapes |
+| `fit` | `fit_ortho` (two control points or more; scale and stretch can be pinned for plates of one printed scale), `fit_perspective` (PnP over the field of view, four points or more), `refine` (coordinate descent), `chamfer` (silhouette agreement) |
+| `ink` | `ink_mask` (threshold, drop short strokes, close dotted members), `silhouette_profile` (widths per height in metres) |
+| `overlay` | `draw_polyline` (model lines on a source), `agreement` (green both, red model only, blue source only, with the shares within tolerance), `background_mask` (a viewer screenshot's structure) |
+
+```python
+from tools.survey import fit_ortho, ink_mask, silhouette_profile
+fit = fit_ortho(world_points, pixel_points, direction=(0, 1, 0), up=(0, 0, 1), image_w=w, image_h=h)
+rows = silhouette_profile(ink_mask(gray, min_stroke_px=120), fit.camera, (-38.6, -35.6), (-2.0, 6.0))
+```
+
+Fit from control points first, then refine against the model: a silhouette-only search can settle in a
+wrong pose. CPU only, no network. Tests: `lite_step/tests/test_tools_survey.py`.
 
 ---
 
