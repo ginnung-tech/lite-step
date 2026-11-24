@@ -153,15 +153,117 @@ def test_the_process_pool_gives_the_same_reports_as_one_process(tmp_path):
 
 
 def test_consensus_needs_two_sources_not_two_shots():
-    def rep(shot, source, shift):
-        return {"shot": shot, "source": source, "groups": [{"element": "member:column", "pixels": 500, "support": 0.3,
-                                                            "shiftMm": shift, "supportShifted": 0.9}], "missing": []}
-    one_source = consensus([rep("a1", "pl-a", [500, 0]), rep("a2", "pl-a", [480, 0])])
-    assert one_source["shifts"] == []
-    two = consensus([rep("a1", "pl-a", [500, 0]), rep("b1", "pl-b", [520, 10])])
+    def rep(shot, source, world):
+        return {"shot": shot, "source": source, "groups": [{
+            "element": "member:column", "pixels": 500, "support": 0.3, "shiftMm": [0, 0], "supportShifted": 0.9,
+            "shiftWorldMm": world, "measuredAxes": [[1, 0, 0], [0, 0, 1]]}], "missing": []}
+    one_source = consensus([rep("a1", "pl-a", [500, 0, 0]), rep("a2", "pl-a", [480, 0, 0])])
+    assert [f["consensus"] for f in one_source["shifts"]] == ["single_source"]
+    two = consensus([rep("a1", "pl-a", [500, 0, 0]), rep("b1", "pl-b", [520, 0, 10])])
     assert two["shifts"][0]["sources"] == ["pl-a", "pl-b"]
-    disagree = consensus([rep("a1", "pl-a", [500, 0]), rep("b1", "pl-b", [-500, 0])])
+    disagree = consensus([rep("a1", "pl-a", [500, 0, 0]), rep("b1", "pl-b", [-500, 0, 0])])
     assert disagree["shifts"] == []
+    # two sub-figures of one plate are one witness, however many tiles they are cut into
+    same_plate = consensus([rep("a1", "pl-a-left", [500, 0, 0]), rep("b1", "pl-a-right", [520, 0, 10])],
+                           roots={"pl-a-left": "pl-a", "pl-a-right": "pl-a"})
+    assert [f["consensus"] for f in same_plate["shifts"]] == ["single_source"]
+
+
+SIDE = OrthoCamera((1.0, 0.0, 0.0), Z, px_per_m=20.0, k=1.0, ax_px=200.0, c_px=350.0, image_w=400, image_h=400)
+
+
+def _cube(dx=0.0, dy=0.0, dz=0.0, size=2.0):
+    return Scene.from_meshes([("G-CUBE", "member:cube", "IfcColumn",
+                               *box(-size / 2 + dx, -size / 2 + dy, 3 + dz, size / 2 + dx, size / 2 + dy, 3 + size + dz))])
+
+
+def _outline(scene: Scene, cam) -> np.ndarray:
+    """A line drawing of the scene through `cam`: the silhouette's outline, 2 px wide (drawings are lines)."""
+    hit = Drone(scene).render(cam).hit.astype(np.uint8)
+    return cv2.morphologyEx(hit, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8))
+
+
+def _two_view_survey(tmp, drawn: Scene, drawn_side: Scene | None = None):
+    """Front (looking north) and side (looking east) line drawings of `drawn`, as two sources."""
+    wd = make_survey(tmp, _outline(drawn, CAM), sources=("front",))
+    s = wd / "survey"
+    cv2.imwrite(str(s / "ink" / "side.png"), _outline(drawn_side or drawn, SIDE))
+    for name, key in (("sources.json", "sources"), ("cameras.json", "cameras"), ("shots.json", "shots")):
+        d = json.loads((s / name).read_text())
+        item = dict(d[key][0])
+        if key == "sources":
+            item.update(id="side", file="sources/side.png", title="side")
+        elif key == "cameras":
+            item.update(source="side", camera=SIDE.to_contract())
+        else:
+            item.update(id="side-all", source="side")
+        d[key].append(item)
+        (s / name).write_text(json.dumps(d))
+    return wd
+
+
+def test_a_known_3d_displacement_is_recovered_from_two_views_at_right_angles(tmp_path):
+    # The drawings show the cube 0.5 m east, 0.3 m north and 0.4 m up of where the model has it. The front
+    # sees x and z, the side y and z; neither alone can say all three, together they must.
+    wd = _two_view_survey(tmp_path, _cube(0.5, 0.3, 0.4))
+    r = run_round(wd, request(), workers=1, scene=_cube())
+    assert r["status"] == "done", r.get("error")
+    shifts = json.loads((wd / "survey/rounds/1/consensus.json").read_text())["shifts"]
+    assert len(shifts) == 1 and shifts[0]["sources"] == ["front", "side"]
+    assert shifts[0]["consensus"] == "two_sources"
+    assert shifts[0]["displacementMm"] == pytest.approx([500, 300, 400], abs=60)  # ~1 px at 20 px/m
+    assert shifts[0]["unknownAxes"] == [] and shifts[0]["seenAxes"] == 3
+
+
+def test_along_a_member_the_shift_is_unknown_not_zero(tmp_path):
+    # A tall thin post drawn 0.5 m east and 1.0 m higher. Both views measure only ACROSS it, so its
+    # vertical shift is not seen by either: reported as an unknown axis, never as "0 mm". The side view
+    # looks along x, so the east shift is seen by the front alone: single-source, said so; the side view
+    # still confirms the post has not moved north or south (zero along its axis).
+    post = lambda dx=0.0, dz=0.0: Scene.from_meshes([("G-POST", "member:post", "IfcColumn",  # noqa: E731
+                                                      *box(-0.25 + dx, -0.25, 0 + dz, 0.25 + dx, 0.25, 12 + dz))])
+    wd = _two_view_survey(tmp_path, post(0.5, 1.0))
+    run_round(wd, request(), workers=1, scene=post())
+    shifts = json.loads((wd / "survey/rounds/1/consensus.json").read_text())["shifts"]
+    assert len(shifts) == 1 and shifts[0]["consensus"] == "single_source" and shifts[0]["seenBy"] == ["front"]
+    assert shifts[0]["sources"] == ["front", "side"]
+    d = shifts[0]["displacementMm"]
+    assert d[0] == pytest.approx(500, abs=60) and abs(d[1]) < 60
+    unknown = np.asarray(shifts[0]["unknownAxes"])
+    assert len(unknown) == 1 and abs(unknown[0][2]) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_no_displacement_no_finding_and_views_that_contradict_make_none(tmp_path):
+    a, b = tmp_path / "same", tmp_path / "contra"
+    a.mkdir()
+    b.mkdir()
+    wd = _two_view_survey(a, _cube())
+    run_round(wd, request(), workers=1, scene=_cube())
+    assert json.loads((wd / "survey/rounds/1/consensus.json").read_text())["shifts"] == []
+    # front draws it 0.8 m up, side 0.8 m down: the shared z axis cannot satisfy both
+    wd = _two_view_survey(b, _cube(dz=0.8), drawn_side=_cube(dz=-0.8))
+    run_round(wd, request(), workers=1, scene=_cube())
+    assert json.loads((wd / "survey/rounds/1/consensus.json").read_text())["shifts"] == []
+
+
+def test_missing_ink_sits_at_the_model_depth_not_on_the_origin_plane(tmp_path):
+    far = Scene.from_meshes([("G-WALL", "member:wall", "IfcWall", *box(-6, 40, 0, 6, 41, 8))])  # 40 m north
+    ink = Drone(far).render(CAM).hit.astype(np.uint8)
+    x0, y1 = (int(v) for v in CAM.project([[7.0, 40.5, 1.0]])[0])
+    x1, y0 = (int(v) for v in CAM.project([[9.0, 40.5, 5.0]])[0])
+    ink[y0:y1, x0:x1] = 1
+    wd = make_survey(tmp_path, ink)
+    run_round(wd, request(), workers=1, scene=far)
+    m = json.loads((wd / "survey/rounds/1/shots/pl-a-all.json").read_text())["missing"][0]
+    assert m["worldMin"][1] == pytest.approx(40.0, abs=0.6)
+
+
+def test_the_round_measures_a_snapshot_and_names_it(tmp_path):
+    import hashlib
+    wd = make_survey(tmp_path, model_ink())
+    sha = hashlib.sha256((wd / "output.ifc").read_bytes()).hexdigest()
+    r = run_round(wd, request(), workers=1, scene=scene())
+    assert r["modelSha256"] == sha
 
 
 def test_a_section_sees_only_what_lies_in_its_depth_range():

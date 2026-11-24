@@ -150,9 +150,13 @@ python -m tools.survey inspect --workdir . --request survey/rounds/12/request.js
 
 Reads only the working directory (the model, and `survey/` with `sources.json`, `cameras.json`, `shots.json`
 and the ink masks `ink/{source}.png`, class 1 = structure) and writes only `survey/rounds/{n}/`: per shot a
-report (precision, recall, per element group its support and the shift that would line it up, ink the model
-lacks as world boxes) and a WebP overlay, then `consensus.json` (only what two sources agree on) and
-`round.json` last. A round that cannot run is written as `status: failed` with its error. One process per
+report (precision, recall, per element group its support, the axes it was measured along and the shift that
+would line it up, ink the model lacks as world boxes at the model's depth) and a WebP overlay, then
+`consensus.json` and `round.json` last. Consensus solves each element's shifts from all views together in 3D
+(views at right angles share one axis), counts sources by their root plate, says `two_sources` only when two
+sources see the displacement's direction, and reports directions no view sees as unknown, never zero. The
+model is measured from a snapshot (its sha256 is in `round.json`); the pool starts processes fresh (never
+forked), one per core but one, at lower priority. A round that cannot run is written as `status: failed` with its error. One process per
 core; the scene is tessellated once per model file and cached by its hash. Shapes: the Ginnung `survey`
 contract, 1.1.
 
