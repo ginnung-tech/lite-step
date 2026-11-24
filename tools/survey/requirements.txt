@@ -1,0 +1,2 @@
+# tools/survey: OpenCV for PnP, distance transforms, masks and drawing (numpy comes with Lite-STEP).
+opencv-python-headless>=4.10,<5
