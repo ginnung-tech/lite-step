@@ -159,7 +159,7 @@ contract, 1.1.
 | Module | What it does |
 | --- | --- |
 | `scene` | the model as triangles per element (ifcopenshell), with the aggregation tree; cached |
-| `drone` | the ID buffer and depth through any survey camera (Open3D ray casting); sections by depth range |
+| `drone` | the ID buffer and depth through any survey camera (Embree ray casting via embreex, or Open3D); sections by depth range |
 | `inspect` | `diff_shot`, `consensus`, `scores`, `run_round` |
 
 On the Eiffel run (306 shots, v12) it reproduces the earlier minion's ink-weighted F (0.7995 against 0.7996,

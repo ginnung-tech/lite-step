@@ -1,4 +1,5 @@
-# tools/survey: OpenCV for PnP, distance transforms, masks and drawing; Open3D for the drone (ray casting).
-# numpy and ifcopenshell come with Lite-STEP.
+# tools/survey: OpenCV for PnP, distance transforms, masks and drawing; embreex (Embree, numpy only) for the
+# drone. Open3D works as the drone's fallback if you have it; it is not needed. numpy and ifcopenshell come
+# with Lite-STEP.
 opencv-python-headless>=4.10,<5
-open3d>=0.19,<0.21
+embreex>=4.4,<5

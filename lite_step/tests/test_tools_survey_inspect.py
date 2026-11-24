@@ -15,7 +15,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 cv2 = pytest.importorskip("cv2")
-pytest.importorskip("open3d")
+try:  # the drone needs one ray caster: embreex (the default) or Open3D
+    import embreex  # noqa: F401
+except ImportError:
+    pytest.importorskip("open3d")
 
 from tools.survey import OrthoCamera  # noqa: E402
 from tools.survey.drone import Drone  # noqa: E402
@@ -199,3 +202,23 @@ def test_a_compiled_lite_step_model_tessellates_into_named_elements(tmp_path):
     assert hi[2] - lo[2] == pytest.approx(10.0, abs=1e-3)
     again = Scene.from_ifc(ifc, cache_dir=tmp_path / "cache")  # from the cache: the same scene
     assert np.array_equal(again.vertices, sc.vertices)
+
+
+def test_both_ray_casters_see_the_same_elements_at_the_same_depth():
+    pytest.importorskip("embreex")
+    pytest.importorskip("open3d")
+    sc = scene()
+    persp = __import__("tools.survey", fromlist=["PerspectiveCamera"]).PerspectiveCamera.look_at((15, -30, 12), (0, 0, 6), 40.0, 320, 240)
+    for cam in (CAM, persp):
+        a, b = Drone(sc, "embreex").render(cam), Drone(sc, "open3d").render(cam)
+        same = (a.element == b.element).mean()
+        assert same > 0.999  # edge pixels may differ by a hair
+        both = a.hit & b.hit
+        assert np.allclose(a.depth[both], b.depth[both], atol=1e-3)
+
+
+def test_the_drone_says_which_ray_caster_it_uses():
+    d = Drone(scene())
+    assert d.backend in ("embreex", "open3d")
+    with pytest.raises(ImportError, match="embreex or open3d"):
+        Drone(scene(), backend="no-such-caster")
