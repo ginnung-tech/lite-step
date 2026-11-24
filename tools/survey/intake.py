@@ -376,7 +376,7 @@ def ask_align(workdir: str | Path, source_id: str, *, now: str, question: str | 
          "question": question or (f"I could not line the model up with this picture. Please click {points} points "
                                   "on it, then the same points on the model."),
          "source": source_id, "points": points}
-    _write(survey_dir(workdir) / "questions" / f"{q['id']}.json", q)
+    _write(confined(survey_dir(workdir), f"questions/{q['id']}.json"), q)
     return q
 
 
