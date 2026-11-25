@@ -2,7 +2,8 @@
 python -m tools.survey add --workdir DIR --picture FILE --kind KIND --title T [--bcfv VIEWPOINT | --points PTS.json] [--model output.ifc]
 python -m tools.survey index --workdir DIR
 python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
-python -m tools.survey ink --workdir DIR --source ID"""
+python -m tools.survey ink --workdir DIR --source ID
+python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID"""
 
 from __future__ import annotations
 
@@ -38,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--points", help="a JSON list of control points [{px, world, by}] (four or more)")
     add.add_argument("--model", default="output.ifc", help="the model to fit against (relative to the workdir)")
     add.add_argument("--illustrative", action="store_true")
+    add.add_argument("--topic", help="the issue (BCF topic guid) the picture came with: its question names it")
+    ans = sub.add_parser("answer", help="the person picked a candidate pose: freeze it")
+    ans.add_argument("--workdir", default=".")
+    ans.add_argument("--question", required=True)
+    ans.add_argument("--choice", required=True)
+    ans.add_argument("--words")
     idx = sub.add_parser("index", help="write survey/index.json (last, after the files are kept)")
     idx.add_argument("--workdir", default=".")
     par = sub.add_parser("partials", help="one shot per detail of a picture: crops, a perspective camera follows them")
@@ -52,6 +59,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.cmd == "add":
         return _add(args)
+    if args.cmd == "answer":
+        from .intake import answer_align
+
+        try:
+            print(json.dumps(answer_align(args.workdir, args.question, args.choice, now=_now(), words=args.words)))
+        except (ValueError, OSError) as e:
+            print(json.dumps({"error": str(e)}))
+            return 2
+        return 0
     if args.cmd in ("partials", "ink"):
         from .intake import add_partials, confined, write_photo_ink
 
@@ -132,7 +148,7 @@ def _fit(wd: Path, src: dict, args, now: str) -> dict:
     if src["kind"] == "text" or src.get("illustrative"):
         return no_fit(wd, src["id"])
     if src["kind"] != "viewer_screenshot" and not args.points:
-        ask_align(wd, src["id"], now=now)
+        ask_align(wd, src["id"], now=now, topic=args.topic)
         return {"id": src["id"], "sha256": src["sha256"], "fit": "failed"}
     from .scene import Scene
 
@@ -141,9 +157,9 @@ def _fit(wd: Path, src: dict, args, now: str) -> dict:
     if src["kind"] == "viewer_screenshot":
         if scene is None:
             raise IntakeError(f"no model at {args.model} to fit the screenshot against")
-        return fit_viewer(wd, src["id"], scene, now=now)
+        return fit_viewer(wd, src["id"], scene, now=now, topic=args.topic)
     pts = json.loads(confined(wd, args.points).read_text(encoding="utf-8"))
-    return fit_points(wd, src["id"], pts, now=now, scene=scene)
+    return fit_points(wd, src["id"], pts, now=now, scene=scene, topic=args.topic)
 
 
 if __name__ == "__main__":

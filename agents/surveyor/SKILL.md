@@ -60,7 +60,10 @@ they know it was understood.
    `add` checks the points against each other: when one disagrees, the fit fails and the person is asked
    about that point. When points disagree, or the outline does not lie on the model, **ask the person**:
    their two clicks (a point on the picture, the same point on the model) are cheaper than any search.
-   Do not try other label sets blind.
+   Do not try other label sets blind. A failed fit offers the person up to three **candidate poses**
+   (the distinct poses the points allow, ranked by outline, each with its overlay) in the `align` question;
+   when they pick one, `python -m tools.survey answer --question Q --choice pose-k` freezes it. Pass
+   `--topic` with `add` so the question names the issue it belongs to.
 5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
 6. Cut a picture into **partials**, one per detail you will measure (`python -m tools.survey partials`, a
    JSON list of `{name, box, purpose}`): each is a crop, and a perspective camera follows it. Give a photo

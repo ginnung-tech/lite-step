@@ -159,7 +159,9 @@ mean for control points) is recorded as failed and leaves an `align` question in
 camera is never nudged until it passes. Text and illustrative pictures are listed, not fitted. It prints the
 answer for that picture as one JSON line. A photo also gates on its outline lying on the model's
 (`outlineWithinPx`, holes closed, 85 %), and five or more control points are checked against each other first: one
-that disagrees fails the fit and the question names it. `partials` writes one cropped shot per detail (a perspective
+that disagrees fails the fit and the question names it. A failed fit's `align` question carries up to three candidate poses (contract
+survey-question 1.2: each a camera, its control points and an overlay, ranked by outline); `answer --question Q --choice
+pose-k` freezes the one the person picked as the next camera version. `partials` writes one cropped shot per detail (a perspective
 camera follows the crop: principal point; lens distortion is in the camera too), `ink` a photo's structure and
 openings (class 5, sky seen through the structure; rounds score them as `openings`). `index` writes `survey/index.json` (every file but `rounds/`, with
 size and sha256): last, after the files are kept. The Surveyor's instructions: `agents/surveyor/SKILL.md`.

@@ -253,3 +253,111 @@ def test_points_that_agree_on_the_wrong_camera_pass_their_residual_and_fail_on_t
     assert "outline" in cam["reason"]
     good = fit_points(tmp_path, src["id"], points(WORLD), now=NOW, scene=column_and_beam())
     assert good["fit"] == "passed"
+
+
+# -- asking the person: candidate poses ----------------------------------------------------------------------
+
+TOPIC = "3f2a9c1e-7b4d-4e8a-9c6f-1a2b3c4d5e6f"
+
+
+def photo_of_the_model(tmp_path):
+    hit = Drone(column_and_beam()).render(CAM).hit
+    img = np.zeros((300, 400, 3), np.uint8)
+    img[...] = (230, 160, 90)
+    img[hit] = (60, 75, 94)
+    pic = tmp_path / "photo.png"
+    cv2.imwrite(str(pic), img)
+    return add_source(tmp_path, pic, kind="photo", title="Photo", now=NOW)
+
+
+def asked(tmp_path):
+    src = photo_of_the_model(tmp_path)
+    bad = points(WORLD)
+    bad[3]["world"] = WORLD[4].tolist()  # one corner named as another
+    r = fit_points(tmp_path, src["id"], bad, now=NOW, scene=column_and_beam(), topic=TOPIC)
+    q = json.loads((tmp_path / "survey/questions/q-align-photo.json").read_text())
+    return r, q
+
+
+def test_a_failed_fit_offers_candidate_poses_ranked_by_outline_with_their_overlays(tmp_path):
+    r, q = asked(tmp_path)
+    assert r["fit"] == "failed"
+    assert q["version"] == "1.2" and q["status"] == "open" and q["bcfTopic"] == TOPIC
+    opts = q["options"]
+    assert 2 <= len(opts) <= 3 and [o["id"] for o in opts] == [f"pose-v2-{k}" for k in range(1, len(opts) + 1)]
+    outlines = [o["pose"]["outlineWithinPx"] for o in opts]
+    assert outlines == sorted(outlines, reverse=True) and outlines[0] > 0.9
+    best = PerspectiveCamera.from_contract(opts[0]["pose"]["camera"])
+    assert np.linalg.norm(np.subtract(best.position, CAM.position)) < 0.5  # the right pose comes first
+    for o in opts:
+        assert (tmp_path / "survey" / o["evidence"][0]).is_file() and o["label"].startswith("seen from the ")
+    assert "(" in q["question"] and "Which of these" in q["question"]
+
+
+def test_picking_a_candidate_freezes_it_and_closes_the_question(tmp_path):
+    from tools.survey.intake import IntakeError, answer_align
+
+    _, q = asked(tmp_path)
+    r = answer_align(tmp_path, q["id"], "pose-v2-1", now=NOW)
+    assert r["fit"] == "passed" and r["cameraVersion"] == 2 and r["overlay"] == "sources/photo.fit-v2.png"
+    s = tmp_path / "survey"
+    assert (s / r["overlay"]).read_bytes() == (s / q["options"][0]["evidence"][0]).read_bytes()
+    assert r["residualMm"] < 5  # measured, and small for the right pose
+    assert r["outlineWithin2px"] == q["options"][0]["pose"]["outlineWithinPx"] and "modelPxWithin2px" not in r
+    cam = json.loads((tmp_path / "survey/cameras.json").read_text())["cameras"][-1]
+    assert cam["method"] == "control_points" and cam["gate"] == "passed" and "chosen by the person" in cam["reason"]
+    after = json.loads((tmp_path / "survey/questions/q-align-photo.json").read_text())
+    assert after["status"] == "answered" and after["answer"]["choice"] == "pose-v2-1"
+    with pytest.raises(IntakeError, match="not an open"):
+        answer_align(tmp_path, q["id"], "pose-v2-1", now=NOW)
+
+
+def test_a_choice_that_is_not_a_candidate_is_refused(tmp_path):
+    from tools.survey.intake import IntakeError, answer_align
+
+    _, q = asked(tmp_path)
+    with pytest.raises(IntakeError, match="not one of"):
+        answer_align(tmp_path, q["id"], "pose-9", now=NOW)
+    with pytest.raises(IntakeError, match="no question"):
+        answer_align(tmp_path, "q-nothing", "pose-1", now=NOW)
+
+
+def test_the_cli_answers(tmp_path, capsys):
+    from tools.survey.__main__ import main
+
+    _, q = asked(tmp_path)
+    assert main(["answer", "--workdir", str(tmp_path), "--question", q["id"], "--choice", "pose-v2-1"]) == 0
+    assert json.loads(capsys.readouterr().out)["fit"] == "passed"
+    assert main(["answer", "--workdir", str(tmp_path), "--question", q["id"], "--choice", "pose-v2-1"]) == 2
+
+
+def test_an_answer_to_an_older_generation_of_the_question_is_refused(tmp_path):
+    from tools.survey.intake import IntakeError, answer_align
+
+    _, first = asked(tmp_path)  # camera v1 failed: candidates become v2
+    bad = points(WORLD)
+    bad[3]["world"] = WORLD[4].tolist()
+    fit_points(tmp_path, "photo", bad, now=NOW, scene=column_and_beam(), topic=TOPIC)  # refit: v2 failed, v3 offered
+    with pytest.raises(IntakeError, match="not one of"):
+        answer_align(tmp_path, first["id"], first["options"][0]["id"], now=NOW)
+
+
+def test_a_retried_answer_closes_the_question_without_a_second_camera(tmp_path, monkeypatch):
+    from tools.survey import intake
+
+    _, q = asked(tmp_path)
+    real = intake._write
+
+    def fail_on_question(path, obj):
+        if "questions" in str(path):
+            raise OSError("disk full")
+        return real(path, obj)
+
+    monkeypatch.setattr(intake, "_write", fail_on_question)
+    with pytest.raises(OSError):
+        intake.answer_align(tmp_path, q["id"], "pose-v2-1", now=NOW)
+    monkeypatch.setattr(intake, "_write", real)
+    r = intake.answer_align(tmp_path, q["id"], "pose-v2-1", now=NOW)
+    cams = json.loads((tmp_path / "survey/cameras.json").read_text())["cameras"]
+    assert [c["version"] for c in cams] == [1, 2] and r["cameraVersion"] == 2
+    assert json.loads((tmp_path / "survey/questions/q-align-photo.json").read_text())["status"] == "answered"
