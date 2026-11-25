@@ -249,7 +249,7 @@ def _model_outline(hit: np.ndarray) -> np.ndarray:
 
 
 def _save_overlay(workdir: Path, source_id: str, version: int, img: np.ndarray, hit: np.ndarray | None,
-                  points: list[tuple[np.ndarray, np.ndarray]] | None = None) -> str:
+                  points: list[tuple[np.ndarray, np.ndarray]] | None = None, name: str | None = None) -> str:
     """The person's picture with the model's outline drawn on it (red), and control points: green where the
     picture says, a red ring where the camera puts them."""
     import cv2
@@ -263,7 +263,7 @@ def _save_overlay(workdir: Path, source_id: str, version: int, img: np.ndarray, 
         cv2.circle(out, tuple(int(round(v)) for v in measured), 5, (80, 170, 60), -1, cv2.LINE_AA)
         if np.all(np.isfinite(projected)):
             cv2.circle(out, tuple(int(round(v)) for v in projected), 9, (40, 40, 220), 2, cv2.LINE_AA)
-    rel = f"sources/{_check_id(source_id)}.fit-v{int(version)}.png"
+    rel = f"sources/{_check_id(source_id)}.{name or f'fit-v{int(version)}'}.png"
     path = confined(survey_dir(workdir), rel)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), out):
@@ -306,6 +306,9 @@ def structure_mask(img: np.ndarray) -> np.ndarray:
     return ~sky if sky.mean() >= SKY_SHARE else background_mask(img)
 
 
+_LAST_TRIALS: list[tuple[float, float, int]] = []  # (rest residual, left-out error, index) of the last check
+
+
 def check_points(points: list[dict], image_w: int, image_h: int, gate_px: float = POINTS_GATE_PX) -> dict | None:
     """Do the control points agree with each other? Leave each out in turn and fit the rest: the point whose
     removal leaves the others consistent is the doubt, when the camera they agree on puts it far from where it
@@ -331,6 +334,7 @@ def check_points(points: list[dict], image_w: int, image_h: int, gate_px: float 
         trials.append((fit.residual_px, err, i))
     if not trials:
         return None
+    _LAST_TRIALS[:] = sorted(trials)
     rest, err, i = min(trials)  # the removal that leaves the others most consistent
     if rest > limit:
         return {"index": None, "errPx": float(rest), "px": None, "world": None}
@@ -373,7 +377,7 @@ def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: fl
 
 
 def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: str, scene=None,
-               gate_px: float = POINTS_GATE_PX, reason: str | None = None) -> dict:
+               gate_px: float = POINTS_GATE_PX, reason: str | None = None, topic: str | None = None) -> dict:
     """Fit a perspective camera to control points: `[{"px": [x, y], "world": [x, y, z], "by": ...}, ...]`,
     four at least, spread in depth where possible. With a `scene`, the overlay also draws the model and the fit
     must also put the picture's outline on the model's (`OUTLINE_GATE`).
@@ -388,7 +392,9 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
     h, w = img.shape[:2]
     world = np.array([p["world"] for p in points], dtype=np.float64)
     px = np.array([p["px"] for p in points], dtype=np.float64)
+    _LAST_TRIALS.clear()
     doubt = check_points(points, w, h, gate_px)
+    trials = list(_LAST_TRIALS)
     f = fit_perspective(world, px, w, h)
     cam = f.camera
     # a pixel's error in millimetres at the point's own distance
@@ -433,13 +439,116 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
         entry["agreement"] = agree
     _record(wd, entry)
     if not passed:
-        if doubt is not None and doubt["index"] is not None:
+        options = candidate_poses(wd, source_id, img, points, trials, scene, camera_version=version + 1)
+        if len(options) >= 2:
+            doubt_words = ""
+            if doubt is not None and doubt["index"] is not None:
+                x, y = (int(round(v)) for v in doubt["px"])
+                doubt_words = f" I am least sure of the point I marked at ({x}, {y})."
+            ask_align(wd, source_id, now=now, points=2, topic=topic, options=options, question=(
+                "I could not be sure how your picture lines up with the model. Which of these looks right?"
+                + doubt_words + " If none does, click a point on the picture and the same point on the model."))
+        elif doubt is not None and doubt["index"] is not None:
             x, y = (int(round(v)) for v in doubt["px"])
-            ask_align(wd, source_id, now=now, points=2, question=(
+            ask_align(wd, source_id, now=now, points=2, topic=topic, question=(
                 f"I am not sure which point on the model I marked at ({x}, {y}) in your picture. Please click that "
                 "point on the picture, then the same point on the model."))
         else:
-            ask_align(wd, source_id, now=now)
+            ask_align(wd, source_id, now=now, topic=topic)
+    return _result(src, entry)
+
+
+MAX_CANDIDATES = 3
+DISTINCT_EYE_M = 2.0  # two candidate poses are the same pose when their eyes are closer than this ...
+DISTINCT_TURN_DEG = 3.0  # ... and their views turn less than this
+_COMPASS = ["east", "north-east", "north", "north-west", "west", "south-west", "south", "south-east"]
+
+
+def pose_label(camera: dict) -> str:
+    """A candidate in words: where the camera stands, seen from the model's origin (x east, y north)."""
+    x, y, _ = camera.get("viewPoint", [0.0, 0.0, 0.0])
+    ang = (np.degrees(np.arctan2(y, x)) + 360.0 + 22.5) % 360.0
+    return f"seen from the {_COMPASS[int(ang // 45)]}, {np.hypot(x, y):.0f} m from the centre"
+
+
+def candidate_poses(workdir: Path, source_id: str, img: np.ndarray, points: list[dict],
+                    trials: list[tuple[float, float, int]], scene, *, camera_version: int) -> list[dict]:
+    """The distinct poses the points allow: all of them, and each leave-one-out fit, ranked by how well the
+    picture's outline lies on the model (by residual without a scene); at most three, each with its overlay
+    (`sources/{id}.cand-{k}.png`). These are what the person is shown to pick from."""
+    h, w = img.shape[:2]
+    world = np.array([p["world"] for p in points], dtype=np.float64)
+    px = np.array([p["px"] for p in points], dtype=np.float64)
+    subsets = [list(range(len(points)))] + [[j for j in range(len(points)) if j != i] for _, _, i in trials]
+    found: list[dict] = []
+    for keep in subsets:
+        if len(keep) < 4:
+            continue
+        try:
+            fit = fit_perspective(world[keep], px[keep], w, h)
+        except ValueError:
+            continue
+        cam = fit.camera
+        fwd = np.asarray(cam.direction) / np.linalg.norm(cam.direction)
+        if any(np.linalg.norm(np.subtract(cam.position, c["cam"].position)) < DISTINCT_EYE_M
+               and np.degrees(np.arccos(np.clip(fwd @ c["fwd"], -1, 1))) < DISTINCT_TURN_DEG for c in found):
+            continue
+        outline = None
+        hit = None
+        if scene is not None:
+            from .drone import Drone
+            from .overlay import outline_agreement
+
+            hit = Drone(scene).render(cam).hit
+            outline = outline_agreement(structure_mask(img), hit, TOL_PX)
+        found.append({"cam": cam, "fwd": fwd, "keep": keep, "residual": fit.residual_px, "outline": outline, "hit": hit})
+    found.sort(key=lambda c: (-(c["outline"] or 0.0), c["residual"]))
+    options = []
+    for k, c in enumerate(found[:MAX_CANDIDATES], start=1):
+        overlay = _save_overlay(workdir, source_id, camera_version, img, c["hit"],
+                                list(zip(px[c["keep"]], c["cam"].project(world[c["keep"]]))), name=f"cand-{k}")
+        camd = c["cam"].to_contract()
+        pose: dict[str, Any] = {"camera": camd, "cameraVersion": camera_version,
+                                "controlPoints": [{"px": [float(v) for v in px[j]], "world": [float(v) for v in world[j]]}
+                                                  for j in c["keep"]]}
+        if c["outline"] is not None:
+            pose["outlineWithinPx"] = round(float(c["outline"]), 4)
+        options.append({"id": f"pose-{k}", "label": pose_label(camd), "evidence": [overlay], "pose": pose})
+    return options
+
+
+def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str, words: str | None = None) -> dict:
+    """The person picked a candidate pose: freeze it as the source's next camera (method control_points, the
+    points the pose was fitted on), mark the question answered, and return the answer for that picture."""
+    wd = Path(workdir)
+    qpath = confined(survey_dir(wd), f"questions/{_check_id(question_id)}.json")
+    if not qpath.exists():
+        raise IntakeError(f"no question {question_id}")
+    q = json.loads(qpath.read_text(encoding="utf-8"))
+    if q.get("kind") != "align" or q.get("status", "open") != "open":
+        raise IntakeError(f"question {question_id} is not an open align question")
+    option = next((o for o in q.get("options", []) if o.get("id") == choice), None)
+    if option is None or "pose" not in option:
+        raise IntakeError(f"{choice!r} is not one of question {question_id}'s candidate poses")
+    src = _source(wd, q["source"])
+    pose = option["pose"]
+    cams = _read(survey_dir(wd) / CAMERAS, "cameras")
+    entry: dict[str, Any] = {
+        "source": src["id"], "version": _next_version(cams, src["id"]), "camera": pose["camera"],
+        "method": "control_points",
+        "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "surveyor"} for cp in pose["controlPoints"]],
+        "residualMm": 0, "gate": "passed", "frozenAt": now,
+        "reason": f"chosen by the person from {len(q.get('options', []))} candidate poses ({question_id}, {choice})",
+        "overlay": option["evidence"][0],
+    }
+    if "outlineWithinPx" in pose:
+        entry["agreement"] = {"tolPx": TOL_PX, "modelWithinPx": 0.0, "sourceWithinPx": 0.0,
+                              "outlineWithinPx": pose["outlineWithinPx"]}
+    _record(wd, entry)
+    q["version"] = "1.2"
+    q["status"] = "answered"
+    q["answer"] = {"choice": choice, "words": (words or f"picked: {option['label']}")[:2000], "at": now}
+    _write(qpath, q)
     return _result(src, entry)
 
 
@@ -485,13 +594,17 @@ def write_photo_ink(workdir: str | Path, source_id: str) -> str:
 
 
 def ask_align(workdir: str | Path, source_id: str, *, now: str, question: str | None = None,
-              points: int = 4) -> dict:
+              points: int = 4, topic: str | None = None, options: list[dict] | None = None) -> dict:
     """An `align` question for a picture that could not be fitted: the person clicks `points` points on the
     picture and the same points on the model (contract survey-question)."""
     q = {"version": "1.0", "id": f"q-align-{_check_id(source_id)}"[:64], "kind": "align", "blocking": False, "askedAt": now,
          "question": question or (f"I could not line the model up with this picture. Please click {points} points "
                                   "on it, then the same points on the model."),
          "source": source_id, "points": points}
+    if options:  # contract survey-question 1.2: candidate poses to pick from
+        q.update(version="1.2", status="open", options=options)
+    if topic:
+        q["bcfTopic"] = topic
     _write(confined(survey_dir(workdir), f"questions/{q['id']}.json"), q)
     return q
 
@@ -520,6 +633,6 @@ def write_index(workdir: str | Path, *, now: str) -> dict:
     return idx
 
 
-__all__ = ["IntakeError", "add_partials", "add_source", "ask_align", "camera_from_bcfv", "camera_to_bcf",
+__all__ = ["IntakeError", "add_partials", "answer_align", "candidate_poses", "pose_label", "add_source", "ask_align", "camera_from_bcfv", "camera_to_bcf",
            "check_points", "fit_points", "fit_viewer", "no_fit", "structure_mask", "survey_dir", "write_index",
            "write_photo_ink"]
