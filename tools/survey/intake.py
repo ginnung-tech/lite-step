@@ -541,15 +541,17 @@ def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str
         "reason": f"chosen by the person from {len(q.get('options', []))} candidate poses ({question_id}, {choice})",
         "overlay": option["evidence"][0],
     }
-    if "outlineWithinPx" in pose:
-        entry["agreement"] = {"tolPx": TOL_PX, "modelWithinPx": 0.0, "sourceWithinPx": 0.0,
-                              "outlineWithinPx": pose["outlineWithinPx"]}
+    # No agreement block: only the outline share was measured for the candidate, and the camera's agreement
+    # needs all its shares. The answer reports the outline share the person saw.
     _record(wd, entry)
     q["version"] = "1.2"
     q["status"] = "answered"
     q["answer"] = {"choice": choice, "words": (words or f"picked: {option['label']}")[:2000], "at": now}
     _write(qpath, q)
-    return _result(src, entry)
+    out = _result(src, entry)
+    if "outlineWithinPx" in pose:
+        out["outlineWithin2px"] = pose["outlineWithinPx"]
+    return out
 
 
 def add_partials(workdir: str | Path, source_id: str, parts: list[dict], *, camera_version: int = 1) -> list[dict]:

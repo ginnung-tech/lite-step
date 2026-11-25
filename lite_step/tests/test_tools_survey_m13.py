@@ -300,6 +300,7 @@ def test_picking_a_candidate_freezes_it_and_closes_the_question(tmp_path):
     _, q = asked(tmp_path)
     r = answer_align(tmp_path, q["id"], "pose-1", now=NOW)
     assert r["fit"] == "passed" and r["cameraVersion"] == 2 and r["overlay"] == q["options"][0]["evidence"][0]
+    assert r["outlineWithin2px"] == q["options"][0]["pose"]["outlineWithinPx"] and "modelPxWithin2px" not in r
     cam = json.loads((tmp_path / "survey/cameras.json").read_text())["cameras"][-1]
     assert cam["method"] == "control_points" and cam["gate"] == "passed" and "chosen by the person" in cam["reason"]
     after = json.loads((tmp_path / "survey/questions/q-align-photo.json").read_text())
