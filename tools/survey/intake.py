@@ -343,7 +343,8 @@ def check_points(points: list[dict], image_w: int, image_h: int, gate_px: float 
     return None
 
 
-def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: float = VIEWER_GATE) -> dict:
+def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: float = VIEWER_GATE,
+               topic: str | None = None) -> dict:
     """Fit a viewer screenshot by its own camera. The camera is never changed here: if the model does not lie
     on the picture, the gate fails and an `align` question is asked."""
     from .drone import Drone
@@ -372,7 +373,7 @@ def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: fl
                            "outlineWithinPx": round(outline_agreement(background_mask(img), hit, TOL_PX), 4)}}
     _record(wd, entry)
     if not passed:
-        ask_align(wd, source_id, now=now)
+        ask_align(wd, source_id, now=now, topic=topic)
     return _result(src, entry)
 
 
@@ -513,8 +514,23 @@ def candidate_poses(workdir: Path, source_id: str, img: np.ndarray, points: list
                                                   for j in c["keep"]]}
         if c["outline"] is not None:
             pose["outlineWithinPx"] = round(float(c["outline"]), 4)
-        options.append({"id": f"pose-{k}", "label": pose_label(camd), "evidence": [overlay], "pose": pose})
+        options.append({"id": f"pose-v{camera_version}-{k}", "label": pose_label(camd), "evidence": [overlay],
+                        "pose": pose})
     return options
+
+
+def _residual_mm(pose: dict) -> float:
+    """The chosen camera's control-point error in millimetres at each point's distance (as fit_points)."""
+    from .camera import camera_from_contract
+
+    cam = camera_from_contract(pose["camera"])
+    world = np.array([cp["world"] for cp in pose["controlPoints"]], dtype=np.float64)
+    px = np.array([cp["px"] for cp in pose["controlPoints"]], dtype=np.float64)
+    err = np.hypot(*(cam.project(world) - px).T)
+    if not isinstance(cam, PerspectiveCamera):
+        return round(float(np.mean(err)) / cam.px_per_m * 1000.0, 1)
+    dist = np.linalg.norm(world - np.asarray(cam.position), axis=1)
+    return round(float(np.mean(err * dist / cam.focal_px)) * 1000.0, 1)
 
 
 def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str, words: str | None = None) -> dict:
@@ -533,17 +549,25 @@ def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str
     src = _source(wd, q["source"])
     pose = option["pose"]
     cams = _read(survey_dir(wd) / CAMERAS, "cameras")
-    entry: dict[str, Any] = {
-        "source": src["id"], "version": _next_version(cams, src["id"]), "camera": pose["camera"],
-        "method": "control_points",
-        "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "surveyor"} for cp in pose["controlPoints"]],
-        "residualMm": 0, "gate": "passed", "frozenAt": now,
-        "reason": f"chosen by the person from {len(q.get('options', []))} candidate poses ({question_id}, {choice})",
-        "overlay": option["evidence"][0],
-    }
-    # No agreement block: only the outline share was measured for the candidate, and the camera's agreement
-    # needs all its shares. The answer reports the outline share the person saw.
-    _record(wd, entry)
+    marker = f"({question_id}, {choice})"
+    done = [c for c in cams["cameras"] if c["source"] == src["id"] and c.get("reason", "").endswith(marker)]
+    if done:  # a retry after the question could not be closed: the camera is already frozen
+        entry = done[-1]
+    else:
+        version = _next_version(cams, src["id"])
+        # the evidence is frozen with the camera: candidate overlays are rewritten by the next failed fit
+        frozen = f"sources/{_check_id(src['id'])}.fit-v{int(version)}.png"
+        confined(survey_dir(wd), frozen).write_bytes(confined(survey_dir(wd), option["evidence"][0]).read_bytes())
+        entry = {
+            "source": src["id"], "version": version, "camera": pose["camera"], "method": "control_points",
+            "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "surveyor"} for cp in pose["controlPoints"]],
+            "residualMm": _residual_mm(pose), "gate": "passed", "frozenAt": now,
+            "reason": f"chosen by the person from {len(q.get('options', []))} candidate poses {marker}",
+            "overlay": frozen,
+        }
+        # No agreement block: only the outline share was measured for the candidate, and the camera's agreement
+        # needs all its shares. The answer reports the outline share the person saw.
+        _record(wd, entry)
     q["version"] = "1.2"
     q["status"] = "answered"
     q["answer"] = {"choice": choice, "words": (words or f"picked: {option['label']}")[:2000], "at": now}

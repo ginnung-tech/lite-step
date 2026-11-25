@@ -157,7 +157,7 @@ def _fit(wd: Path, src: dict, args, now: str) -> dict:
     if src["kind"] == "viewer_screenshot":
         if scene is None:
             raise IntakeError(f"no model at {args.model} to fit the screenshot against")
-        return fit_viewer(wd, src["id"], scene, now=now)
+        return fit_viewer(wd, src["id"], scene, now=now, topic=args.topic)
     pts = json.loads(confined(wd, args.points).read_text(encoding="utf-8"))
     return fit_points(wd, src["id"], pts, now=now, scene=scene, topic=args.topic)
 
