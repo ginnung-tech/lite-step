@@ -557,7 +557,7 @@ def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str
         version = _next_version(cams, src["id"])
         # the evidence is frozen with the camera: candidate overlays are rewritten by the next failed fit
         frozen = f"sources/{_check_id(src['id'])}.fit-v{int(version)}.png"
-        confined(survey_dir(wd), frozen).write_bytes(confined(survey_dir(wd), option["evidence"][0]).read_bytes())
+        shutil.copyfile(confined(survey_dir(wd), option["evidence"][0]), confined(survey_dir(wd), frozen))
         entry = {
             "source": src["id"], "version": version, "camera": pose["camera"], "method": "control_points",
             "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "surveyor"} for cp in pose["controlPoints"]],
