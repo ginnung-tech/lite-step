@@ -55,3 +55,29 @@ def background_mask(image_bgr: np.ndarray, background_bgr=None, tol: int = 24) -
         background_bgr = np.median(corners, axis=0)
     diff = np.abs(image_bgr.astype(np.int32) - np.asarray(background_bgr, dtype=np.int32)).sum(axis=2)
     return diff > tol
+
+
+def outline(mask: np.ndarray, close_px: int = 31) -> np.ndarray:
+    """The boundary of a mask against the background once its holes are closed (a lattice becomes its
+    silhouette)."""
+    import cv2
+
+    k = max(3, int(close_px) | 1)
+    closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    return cv2.morphologyEx(closed, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)).astype(bool)
+
+
+def outline_agreement(source_mask: np.ndarray, model_mask: np.ndarray, tol_px: float = 2.0,
+                      close_px: int = 31) -> float:
+    """Share of the SOURCE's outline within `tol_px` of the model's outline (both closed first).
+
+    The gate for photos of frame-filling structures: there `agreement().model_within_px` stays near 1 for a
+    wrong pose, because almost any model pixel lands on some structure (m13 photo, 2026-11-25: 0.97-0.99 for
+    wrong poses; this measure 0.53 and 0.61 wrong, 0.92 right)."""
+    import cv2
+
+    src, mod = outline(source_mask, close_px), outline(model_mask, close_px)
+    if not src.any() or not mod.any():
+        return 0.0
+    dt = cv2.distanceTransform((~mod).astype(np.uint8), cv2.DIST_L2, 3)
+    return float((dt[src] <= tol_px).mean())

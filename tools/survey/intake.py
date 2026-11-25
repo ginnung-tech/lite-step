@@ -39,6 +39,12 @@ TOL_PX = 2.0
 VIEWER_GATE = 0.80
 #: a control-point fit passes when the mean residual is at most this many pixels
 POINTS_GATE_PX = 4.0
+#: a photo's fit also needs this share of its outline (holes closed) on the model's: the m13 lesson
+OUTLINE_GATE = 0.85
+#: a control point disagrees with the others when, fitted without it, the camera puts it this far away
+DISAGREE_PX = 20.0
+#: a photo whose background is mostly clear sky is measured against the sky, not its corners
+SKY_SHARE = 0.05
 
 PICTURE_KINDS = ("elevation", "plan", "section", "detail_plane", "perspective", "photo", "viewer_screenshot",
                  "screenshot", "sketch")
@@ -290,11 +296,54 @@ def _result(source: dict, cam_entry: dict) -> dict:
     return r
 
 
+def structure_mask(img: np.ndarray) -> np.ndarray:
+    """What is structure in a picture: everything that is not clear sky when the picture has sky (a photo),
+    else everything that is not the flat background of its corners (a viewer screenshot)."""
+    from .ink import sky_mask
+    from .overlay import background_mask
+
+    sky = sky_mask(img)
+    return ~sky if sky.mean() >= SKY_SHARE else background_mask(img)
+
+
+def check_points(points: list[dict], image_w: int, image_h: int, gate_px: float = POINTS_GATE_PX) -> dict | None:
+    """Do the control points agree with each other? Leave each out in turn and fit the rest: the point whose
+    removal leaves the others consistent is the doubt, when the camera they agree on puts it far from where it
+    was clicked. Returns {"index", "errPx", "px", "world"}; {"index": None, ...} when no single removal makes
+    the rest consistent (more than one doubt); None when they agree. Five points at least, six check better
+    (four points fit almost anything).
+
+    The m13 photo's failures were labels, not pixels: a corner of a symmetric structure named as another."""
+    if len(points) < 5:
+        return None
+    world = np.array([p["world"] for p in points], dtype=np.float64)
+    px = np.array([p["px"] for p in points], dtype=np.float64)
+    limit = max(DISAGREE_PX, 5 * gate_px)
+    trials = []
+    for i in range(len(points)):
+        keep = [j for j in range(len(points)) if j != i]
+        try:
+            fit = fit_perspective(world[keep], px[keep], image_w, image_h)
+        except ValueError:
+            continue
+        q = fit.camera.project(world[i:i + 1])[0]
+        err = float(np.hypot(*(q - px[i]))) if np.all(np.isfinite(q)) else float("inf")
+        trials.append((fit.residual_px, err, i))
+    if not trials:
+        return None
+    rest, err, i = min(trials)  # the removal that leaves the others most consistent
+    if rest > limit:
+        return {"index": None, "errPx": float(rest), "px": None, "world": None}
+    if err > limit and err > 3 * max(rest, 1.0):
+        return {"index": i, "errPx": err, "px": px[i].tolist(), "world": world[i].tolist()}
+    return None
+
+
 def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: float = VIEWER_GATE) -> dict:
     """Fit a viewer screenshot by its own camera. The camera is never changed here: if the model does not lie
     on the picture, the gate fails and an `align` question is asked."""
     from .drone import Drone
-    from .overlay import agreement, background_mask
+    from .overlay import agreement, background_mask, outline_agreement
 
     wd = Path(workdir)
     src = _source(wd, source_id)
@@ -315,7 +364,8 @@ def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: fl
                         if hit.any() else "the viewer's own camera sees none of the model"),
              "overlay": _save_overlay(wd, source_id, version, img, hit),
              "agreement": {"tolPx": TOL_PX, "modelWithinPx": round(a.model_within_px, 4),
-                           "sourceWithinPx": round(a.source_within_px, 4)}}
+                           "sourceWithinPx": round(a.source_within_px, 4),
+                           "outlineWithinPx": round(outline_agreement(background_mask(img), hit, TOL_PX), 4)}}
     _record(wd, entry)
     if not passed:
         ask_align(wd, source_id, now=now)
@@ -325,7 +375,11 @@ def fit_viewer(workdir: str | Path, source_id: str, scene, *, now: str, gate: fl
 def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: str, scene=None,
                gate_px: float = POINTS_GATE_PX, reason: str | None = None) -> dict:
     """Fit a perspective camera to control points: `[{"px": [x, y], "world": [x, y, z], "by": ...}, ...]`,
-    four at least, spread in depth where possible. With a `scene`, the overlay also draws the model."""
+    four at least, spread in depth where possible. With a `scene`, the overlay also draws the model and the fit
+    must also put the picture's outline on the model's (`OUTLINE_GATE`).
+
+    Five points or more are checked against each other first (`check_points`): when one disagrees, the fit
+    is recorded as failed and the person is asked about THAT point, rather than searching on."""
     wd = Path(workdir)
     src = _source(wd, source_id)
     if src["kind"] == "text" or src.get("illustrative"):
@@ -334,6 +388,7 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
     h, w = img.shape[:2]
     world = np.array([p["world"] for p in points], dtype=np.float64)
     px = np.array([p["px"] for p in points], dtype=np.float64)
+    doubt = check_points(points, w, h, gate_px)
     f = fit_perspective(world, px, w, h)
     cam = f.camera
     # a pixel's error in millimetres at the point's own distance
@@ -344,15 +399,27 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
     agree = None
     if scene is not None:
         from .drone import Drone
-        from .overlay import agreement, background_mask
+        from .overlay import agreement, outline_agreement
 
         hit = Drone(scene).render(cam).hit
-        a = agreement(background_mask(img), hit, tol_px=TOL_PX)
+        structure = structure_mask(img)
+        a = agreement(structure, hit, tol_px=TOL_PX)
         agree = {"tolPx": TOL_PX, "modelWithinPx": round(a.model_within_px, 4),
-                 "sourceWithinPx": round(a.source_within_px, 4)}
+                 "sourceWithinPx": round(a.source_within_px, 4),
+                 "outlineWithinPx": round(outline_agreement(structure, hit, TOL_PX), 4)}
     cams = _read(survey_dir(wd) / CAMERAS, "cameras")
     version = _next_version(cams, source_id)
-    passed = f.residual_px <= gate_px
+    passed = (f.residual_px <= gate_px and doubt is None
+              and (agree is None or agree["outlineWithinPx"] >= OUTLINE_GATE))
+    if doubt is not None and doubt["index"] is None:
+        reason = ("the control points disagree with each other, and not one of them alone: more than one label "
+                  "(which point on the model) is likely wrong")
+    elif doubt is not None:
+        reason = (f"control point {doubt['index'] + 1} disagrees with the others: fitted without it, the camera "
+                  f"puts it {doubt['errPx']:.0f} px away. Its label (which point on the model) is the likely error.")
+    elif agree is not None and agree["outlineWithinPx"] < OUTLINE_GATE:
+        reason = (f"{len(points)} control points, PnP {f.residual_px:.1f} px, but only "
+                  f"{agree['outlineWithinPx']:.0%} of the picture's outline lies on the model's")
     entry: dict[str, Any] = {
         "source": source_id, "version": version, "camera": cam.to_contract(), "method": "control_points",
         "controlPoints": [{"px": [float(v) for v in p["px"]], "world": [float(v) for v in p["world"]],
@@ -366,8 +433,55 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
         entry["agreement"] = agree
     _record(wd, entry)
     if not passed:
-        ask_align(wd, source_id, now=now)
+        if doubt is not None and doubt["index"] is not None:
+            x, y = (int(round(v)) for v in doubt["px"])
+            ask_align(wd, source_id, now=now, points=2, question=(
+                f"I am not sure which point on the model I marked at ({x}, {y}) in your picture. Please click that "
+                "point on the picture, then the same point on the model."))
+        else:
+            ask_align(wd, source_id, now=now)
     return _result(src, entry)
+
+
+def add_partials(workdir: str | Path, source_id: str, parts: list[dict], *, camera_version: int = 1) -> list[dict]:
+    """One shot per detail of a picture: `[{"name", "box": [x0, y0, x1, y1], "purpose"}]`. The shot is the crop
+    (a perspective camera follows it: `PerspectiveCamera.crop`); ids are `{source}-{name}`; a partial with the
+    same id is replaced."""
+    s = survey_dir(workdir)
+    src = _source(Path(workdir), source_id)
+    table = _read(s / "shots.json", "shots")
+    new = []
+    for p in parts:
+        sid = _check_id(f"{src['id']}-{p['name']}"[:64])
+        x0, y0, x1, y1 = (int(v) for v in p["box"])
+        if not (0 <= x0 < x1 and 0 <= y0 < y1):
+            raise IntakeError(f"partial {sid}: box {p['box']} is empty or negative")
+        new.append({"id": sid, "source": src["id"], "cameraVersion": int(camera_version), "cropPx": [x0, y0, x1, y1],
+                    "purpose": str(p.get("purpose") or p["name"])[:300]})
+    ids = {n["id"] for n in new}
+    table["version"] = VERSION
+    table["shots"] = [t for t in table["shots"] if t["id"] not in ids] + new
+    _write(s / "shots.json", table)
+    return new
+
+
+def write_photo_ink(workdir: str | Path, source_id: str) -> str:
+    """ink/{source}.png for a photo: structure (1), openings (5: sky seen through the structure), nothing
+    else; the source's `excludePx` boxes are left out. Returns the path inside survey/."""
+    import cv2
+
+    from .ink import photo_ink, sky_mask
+
+    wd = Path(workdir)
+    src = _source(wd, source_id)
+    img = _read_image(confined(survey_dir(wd), src["file"]))
+    ink = photo_ink(img, sky_mask(img), exclude_px=src.get("excludePx"))
+    rel = f"ink/{_check_id(source_id)}.png"
+    out = confined(survey_dir(wd), rel)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(out), ink):
+        raise IntakeError(f"could not write {rel}")
+    return rel
 
 
 def ask_align(workdir: str | Path, source_id: str, *, now: str, question: str | None = None,
@@ -406,5 +520,6 @@ def write_index(workdir: str | Path, *, now: str) -> dict:
     return idx
 
 
-__all__ = ["IntakeError", "add_source", "ask_align", "camera_from_bcfv", "camera_to_bcf", "fit_points", "fit_viewer",
-           "no_fit", "survey_dir", "write_index"]
+__all__ = ["IntakeError", "add_partials", "add_source", "ask_align", "camera_from_bcfv", "camera_to_bcf",
+           "check_points", "fit_points", "fit_viewer", "no_fit", "structure_mask", "survey_dir", "write_index",
+           "write_photo_ink"]

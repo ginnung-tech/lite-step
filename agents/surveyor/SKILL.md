@@ -48,18 +48,35 @@ they know it was understood.
 
    Each prints one JSON line: `fit` is `passed`, `failed`, `not_a_picture` or `illustrative`, with the
    camera version, the overlay (the picture with the model drawn on it) and the share of model pixels
-   within 2 px of the picture.
+   within 2 px of the picture. For a photo the gate is its **outline** on the model's (`outlineWithinPx`,
+   holes closed): a lattice that fills the frame puts almost any model pixel on some structure, so the share
+   of model pixels stays near 1 for a wrong pose.
 3. A viewer screenshot fits by its own camera. A photo or another program's screenshot needs control
-   points: at least four, pixel and world, spread in depth. Find them with code (corners in the ID buffer
-   of a rough view, edges in the picture), not by eye. Write them to `survey/scripts/<id>-points.json`.
-4. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
-5. `python -m tools.survey index --workdir .` last, after everything else is written.
+   points: six is better than four, pixel and world, spread in depth. Find them with code (corners in the
+   ID buffer of a rough view, edges in the picture), not by eye. Write them to
+   `survey/scripts/<id>-points.json`.
+4. **What goes wrong is the label, not the pixel.** On a symmetric structure it is easy to name a corner
+   as another (the inner crossbow for the outer corner, the SE corner for the NE) and nothing complains.
+   `add` checks the points against each other: when one disagrees, the fit fails and the person is asked
+   about that point. When points disagree, or the outline does not lie on the model, **ask the person**:
+   their two clicks (a point on the picture, the same point on the model) are cheaper than any search.
+   Do not try other label sets blind.
+5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
+6. Cut a picture into **partials**, one per detail you will measure (`python -m tools.survey partials`, a
+   JSON list of `{name, box, purpose}`): each is a crop, and a perspective camera follows it. Give a photo
+   its ink with `python -m tools.survey ink`: structure, and the **openings** (sky seen through the
+   structure), which are what a round scores a lattice on.
+7. `python -m tools.survey index --workdir .` last, after everything else is written.
 
 ## Measuring
 
 `python -m tools.survey inspect --workdir . --n N --model output.ifc --model-version V` runs a round of
 minions over `shots.json` and writes `survey/rounds/N/`. The round's scores, findings and consensus are
-facts; report them with the numbers, the source and the camera version they came from.
+facts; report them with the numbers, the source and the camera version they came from. A shot with
+openings also reports `openings` and the round `openingsWeightedF1`: read those for a lattice, because
+behind a lattice face a photo is near-solid structure and the structure score cannot tell a lattice from
+solid bars. Spend detail where a source shows it: every element costs compile, tessellation and every
+round.
 
 ## Rules
 

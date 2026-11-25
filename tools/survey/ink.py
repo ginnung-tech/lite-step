@@ -71,3 +71,33 @@ def silhouette_profile(mask: np.ndarray, cam: OrthoCamera, u_range: tuple[float,
         u = cam.to_uv(np.array([[xl + xs[0], y], [xl + xs[-1], y]]))[:, 0]
         rows.append(ProfileRow(round(float(v), 6), float(u[0]), float(u[1])))
     return rows
+
+
+INK_STRUCTURE, INK_OPENING = 1, 5  # contract survey: 1 structure, 5 opening (1.2)
+
+
+def photo_ink(image_bgr: np.ndarray, background: np.ndarray, close_px: int = 31,
+              exclude_px: list[list[int]] | None = None) -> np.ndarray:
+    """Ink classes for a photo: 1 structure (not background), 5 opening (background seen THROUGH the
+    structure: inside its closed outline), 0 everything else. `background` is the photo's background mask
+    (e.g. sky by colour); `exclude_px` boxes [x0, y0, x1, y1] are left out (0: not measured).
+
+    The openings are what lets a round see a lattice: behind a face a photo is near-solid structure, and the
+    structure score alone cannot tell a lattice from solid bars."""
+    import cv2
+
+    structure = ~background.astype(bool)
+    k = max(3, int(close_px) | 1)
+    closed = cv2.morphologyEx(structure.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)).astype(bool)
+    ink = np.zeros(structure.shape, np.uint8)
+    ink[structure] = INK_STRUCTURE
+    ink[closed & ~structure] = INK_OPENING
+    for x0, y0, x1, y1 in exclude_px or []:
+        ink[y0:y1, x0:x1] = 0
+    return ink
+
+
+def sky_mask(image_bgr: np.ndarray) -> np.ndarray:
+    """A clear blue sky by colour (blue well above red, a little above green, bright enough)."""
+    b, g, r = (image_bgr[..., i].astype(np.int32) for i in range(3))
+    return (b > 140) & (b > r + 35) & (b > g + 5)
