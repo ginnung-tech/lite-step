@@ -92,7 +92,7 @@ def test_a_viewer_screenshot_fits_by_its_own_camera_and_is_shown_back(tmp_path):
     assert (tmp_path / "survey" / r["overlay"]).is_file()
     cam = table(tmp_path, "cameras.json")["cameras"][0]
     assert cam["method"] == "viewer" and cam["gate"] == "passed" and cam["overlay"] == r["overlay"]
-    assert set(cam["agreement"]) == {"tolPx", "modelWithinPx", "sourceWithinPx"}
+    assert set(cam["agreement"]) == {"tolPx", "modelWithinPx", "sourceWithinPx", "outlineWithinPx"}
     assert not (tmp_path / "survey" / "questions").exists()
     assert r["bcfCamera"]["perspective_camera"]["field_of_view"] == pytest.approx(45.0)
 

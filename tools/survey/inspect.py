@@ -37,6 +37,8 @@ from .scene import Scene
 logger = logging.getLogger(__name__)
 
 INK_STRUCTURE = 1  # class value in ink/{source}.png (contract survey 1.1)
+INK_OPENING = 5  # 1.2: background seen through the structure, inside its closed outline
+OPENING_CLOSE_M = 2.0  # the model's openings: holes inside its outline once closed at about this size
 OVERLAY_MAX_PX = 1600
 _SAFE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*$")
 
@@ -120,7 +122,9 @@ def load_shots(survey: Path, only: list[str] | None = None) -> list[ShotContext]
         if c["kind"] == "ortho":
             c.update(axPx=c["axPx"] - x0, cPx=c["cPx"] - y0, imageW=x1 - x0, imageH=y1 - y0)
         elif (x0, y0, x1, y1) != (0, 0, c["imageW"], c["imageH"]):
-            raise InspectError(f"shot {s['id']}: a perspective shot covers its whole picture (crop it at intake)")
+            # 1.2: the camera follows the crop (principal point moves, focal length stays)
+            from .camera import PerspectiveCamera
+            c = PerspectiveCamera.from_contract(c).crop(x0, y0, x1, y1).to_contract()
         region = tuple(tuple(p) for p in s["regionPx"]) if s.get("regionPx") else None
         out.append(ShotContext(s["id"], s["source"], int(s["cameraVersion"]), c, str(ink), (x0, y0, x1, y1), region,
                                tuple(tuple(b) for b in s.get("ignorePx", []))))
@@ -233,6 +237,7 @@ def diff_shot(drone: Drone, shot: ShotContext, out_dir: Path, *, tol_m: float = 
         raise InspectError(f"shot {shot.id}: cannot read {shot.ink_file}")
     x0, y0, x1, y1 = shot.crop
     ink = full[y0:y1, x0:x1] == INK_STRUCTURE
+    openings_ink = full[y0:y1, x0:x1] == INK_OPENING
     if shot.region:
         region = np.zeros(ink.shape, np.uint8)
         cv2.fillPoly(region, [np.asarray(shot.region, dtype=np.int32)], 1)
@@ -240,8 +245,10 @@ def diff_shot(drone: Drone, shot: ShotContext, out_dir: Path, *, tol_m: float = 
     else:
         region = np.ones(ink.shape, bool)
     ink &= region
+    openings_ink &= region
     for a, b, c, d in shot.ignore:
         ink[b:d, a:c] = False
+        openings_ink[b:d, a:c] = False
 
     frame = drone.render(cam)
     ids = frame.element
@@ -254,6 +261,7 @@ def diff_shot(drone: Drone, shot: ShotContext, out_dir: Path, *, tol_m: float = 
     precision = float((d_ink[m_in] <= tol).mean()) if m_in.any() else 0.0
     recall = float((d_model[ink] <= tol).mean()) if ink.any() else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    openings = _openings(model, openings_ink, region, tol, max(3, int(OPENING_CLOSE_M * min(sx, sy))))
 
     scene = drone.scene
     near_ink = d_ink <= tol
@@ -338,10 +346,33 @@ def diff_shot(drone: Drone, shot: ShotContext, out_dir: Path, *, tol_m: float = 
     overlay.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(overlay), img, [cv2.IMWRITE_WEBP_QUALITY, 80])
 
-    return {"shot": shot.id, "source": shot.source, "cameraVersion": shot.camera_version,
-            "precision": round(precision, 4), "recall": round(recall, 4), "f1": round(f1, 4),
-            "modelPx": int(model.sum()), "inkPx": int(ink.sum()), "groups": measured[:300], "missing": missing[:40],
-            "overlay": overlay.relative_to(out_dir.parent.parent).as_posix()}
+    report = {"shot": shot.id, "source": shot.source, "cameraVersion": shot.camera_version,
+              "precision": round(precision, 4), "recall": round(recall, 4), "f1": round(f1, 4),
+              "modelPx": int(model.sum()), "inkPx": int(ink.sum()), "groups": measured[:300], "missing": missing[:40],
+              "overlay": overlay.relative_to(out_dir.parent.parent).as_posix()}
+    if openings is not None:
+        report["openings"] = openings
+    return report
+
+
+def _openings(model: np.ndarray, openings_ink: np.ndarray, region: np.ndarray, tol: float, close_px: int) -> dict | None:
+    """The structure score's twin for what is seen THROUGH the structure (contract survey 1.2, ink class 5):
+    the model's openings (holes inside its closed outline) against the source's. Behind a lattice face a
+    photo is near-solid structure, so only the holes can tell a lattice from solid bars (m13, 2026-11-25).
+    None when the source marks no openings here."""
+    import cv2
+
+    if not openings_ink.any():
+        return None
+    k = max(3, int(close_px) | 1)
+    closed = cv2.morphologyEx(model.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((k, k), np.uint8)).astype(bool)
+    model_open = closed & ~model & region
+    d_ink = cv2.distanceTransform((~openings_ink).astype(np.uint8), cv2.DIST_L2, 3)
+    d_model = cv2.distanceTransform((~model_open).astype(np.uint8), cv2.DIST_L2, 3)
+    p = float((d_ink[model_open] <= tol).mean()) if model_open.any() else 0.0
+    r = float((d_model[openings_ink] <= tol).mean())
+    f = 2 * p * r / (p + r) if p + r else 0.0
+    return {"precision": round(p, 4), "recall": round(r, 4), "f1": round(f, 4), "openingPx": int(openings_ink.sum())}
 
 
 # -- consensus and scores ------------------------------------------------------------------------------------
@@ -579,6 +610,10 @@ def run_round(workdir: str | Path, request: dict, workers: int | None = None,
         result = {**base, "scores": scores(reports, found, roots), "status": "done", "shotCount": len(reports),
                   "durationS": round(time.monotonic() - t0, 2),
                   "inkWeightedF1": round(sum(r["f1"] * r["inkPx"] for r in reports) / ink, 4) if ink else 0.0}
+        opened = [r["openings"] for r in reports if r.get("openings")]
+        if opened:  # contract survey 1.2: absent when no shot marks openings
+            px = sum(o["openingPx"] for o in opened)
+            result["openingsWeightedF1"] = round(sum(o["f1"] * o["openingPx"] for o in opened) / px, 4) if px else 0.0
     except Exception as exc:  # noqa: BLE001 - every failure becomes a failed round, said out loud
         logger.exception("[survey.inspect] round %d failed", n)
         result = {**base, "status": "failed", "error": f"{type(exc).__name__}: {exc}"[:2000],

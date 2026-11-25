@@ -157,7 +157,11 @@ red, control points green where the picture has them, ringed where the camera pu
 (share of model pixels within 2 px of the picture). A fit under its gate (80 % for a viewer screenshot, 4 px
 mean for control points) is recorded as failed and leaves an `align` question in `survey/questions/`; the
 camera is never nudged until it passes. Text and illustrative pictures are listed, not fitted. It prints the
-answer for that picture as one JSON line. `index` writes `survey/index.json` (every file but `rounds/`, with
+answer for that picture as one JSON line. A photo also gates on its outline lying on the model's
+(`outlineWithinPx`, holes closed, 85 %), and five or more control points are checked against each other first: one
+that disagrees fails the fit and the question names it. `partials` writes one cropped shot per detail (a perspective
+camera follows the crop: principal point; lens distortion is in the camera too), `ink` a photo's structure and
+openings (class 5, sky seen through the structure; rounds score them as `openings`). `index` writes `survey/index.json` (every file but `rounds/`, with
 size and sha256): last, after the files are kept. The Surveyor's instructions: `agents/surveyor/SKILL.md`.
 Tests: `test_tools_survey_intake.py`.
 

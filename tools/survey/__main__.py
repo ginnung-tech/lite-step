@@ -1,6 +1,8 @@
 """python -m tools.survey inspect --workdir DIR (--request survey/rounds/N/request.json | --n N --model output.ifc --model-version V)
 python -m tools.survey add --workdir DIR --picture FILE --kind KIND --title T [--bcfv VIEWPOINT | --points PTS.json] [--model output.ifc]
-python -m tools.survey index --workdir DIR"""
+python -m tools.survey index --workdir DIR
+python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
+python -m tools.survey ink --workdir DIR --source ID"""
 
 from __future__ import annotations
 
@@ -38,10 +40,32 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--illustrative", action="store_true")
     idx = sub.add_parser("index", help="write survey/index.json (last, after the files are kept)")
     idx.add_argument("--workdir", default=".")
+    par = sub.add_parser("partials", help="one shot per detail of a picture: crops, a perspective camera follows them")
+    par.add_argument("--workdir", default=".")
+    par.add_argument("--source", required=True)
+    par.add_argument("--parts", required=True, help='a JSON list [{"name", "box": [x0, y0, x1, y1], "purpose"}]')
+    par.add_argument("--camera-version", type=int, default=1)
+    ink = sub.add_parser("ink", help="ink for a photo: structure (1) and openings (5, sky seen through it)")
+    ink.add_argument("--workdir", default=".")
+    ink.add_argument("--source", required=True)
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.cmd == "add":
         return _add(args)
+    if args.cmd in ("partials", "ink"):
+        from .intake import add_partials, confined, write_photo_ink
+
+        try:
+            if args.cmd == "partials":
+                parts = json.loads(confined(args.workdir, args.parts).read_text(encoding="utf-8"))
+                out = add_partials(args.workdir, args.source, parts, camera_version=args.camera_version)
+                print(json.dumps({"shots": [s["id"] for s in out]}))
+            else:
+                print(json.dumps({"ink": write_photo_ink(args.workdir, args.source)}))
+        except (ValueError, OSError) as e:  # IntakeError is a ValueError
+            print(json.dumps({"error": str(e)}))
+            return 2
+        return 0
     if args.cmd == "index":
         from .intake import write_index
 
