@@ -47,6 +47,14 @@ _NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _FEATURE = re.compile(r"^(?P<el>[^:]+):(?P<x>xmin|xmax),(?P<y>ymin|ymax),(?P<z>zmin|zmax)$")
 
 
+#: a picture whose kept points miss the model by more than this many pixels on average (or this share of its
+#: diagonal, whichever is larger) is a poor fit, not a measurement
+POOR_FIT_PX = 15.0
+POOR_FIT_FRACTION = 0.01
+#: a measured size whose one-sigma spread is larger than this share of its value is flagged uncertain
+UNCERTAIN_FRACTION = 0.5
+
+
 class MeasureError(ValueError):
     """The inputs cannot give a measurement; the message says which input."""
 
@@ -415,6 +423,7 @@ def measure(source: str, points: list[dict], fixed: list[str], image_w: int, ima
                      keys, drop)
     p = r["pictures"][0]
     return {"dimensions": r["dimensions"], "verdict": p["verdict"], "camera": p["camera"], "rmsPx": p["rmsPx"],
+            "poorFitPx": p["poorFitPx"],
             "residualPx": p["residualPx"], "dropped": p["dropped"], "labelChecks": p["labelChecks"],
             "edited": r["edited"]}
 
@@ -493,8 +502,12 @@ def measure_many(source: str, pictures: list[dict], fixed: list[str], lite_step_
         was, now = current[k], m.values[k]
         if by_key[k].is_int:
             now = float(int(round(now)))
-        rows.append({"key": k, "was": was, "now": now, "sigma": round(m.sigma[k], 1),
-                     "seen": m.seen[k] if k not in fixed else True, "fixed": k in fixed})
+        row = {"key": k, "was": was, "now": now, "sigma": round(m.sigma[k], 1),
+               "seen": m.seen[k] if k not in fixed else True, "fixed": k in fixed}
+        # a measured size whose spread is as large as half of it is a guess, not a measurement: it is flagged
+        # and not written into the edited script (staging 2026-11-26: BAY_X 691 +- 525 mm, "verdict ok")
+        row["uncertain"] = bool(row["seen"] and not row["fixed"] and m.sigma[k] > UNCERTAIN_FRACTION * max(abs(now), 1.0))
+        rows.append(row)
     delta = np.array([m.values[k] - current[k] for k in sens_all.keys])
     world = sens_all.base + sens_all.jac @ delta
     out = []
@@ -511,15 +524,21 @@ def measure_many(source: str, pictures: list[dict], fixed: list[str], lite_step_
         lone = {d["feature"] for d in dr if per_el[d["feature"].split(":", 1)[0]] == 1}
         for c in ck:
             c["explained"] = any(f in lone for f in c["features"])
+        rms = float(np.sqrt((err[kp] ** 2).mean()))
+        # a fit whose points sit far from the model is not a measurement, whatever the labels: the model is wrong
+        # where it is held (an element placed at fixed coordinates the photo disagrees with, a missing member),
+        # or the points are. Staging 2026-11-26: 42 and 99 px came back as "ok".
+        limit = max(POOR_FIT_PX, POOR_FIT_FRACTION * float(np.hypot(f.w, f.h)))
         verdict = ("labels_suspect" if any(not c["explained"] for c in ck)
-                   else "too_many_dropped" if drop and dr and left == 0 else "ok")
+                   else "too_many_dropped" if drop and dr and left == 0
+                   else "poor_fit" if rms > limit else "ok")
         out.append({"name": pic.get("name", ""), "verdict": verdict, "camera": cam.to_contract(),
-                    "rmsPx": round(float(np.sqrt((err[kp] ** 2).mean())), 2), "residualPx": err.round(2).tolist(),
+                    "rmsPx": round(rms, 2), "poorFitPx": round(limit, 1), "residualPx": err.round(2).tolist(),
                     "dropped": dr, "labelChecks": ck})
     return {"dimensions": rows, "pictures": out,
             "verdict": "ok" if all(p["verdict"] == "ok" for p in out) else "untrusted",
             "edited": with_dimensions(source, dims, {r["key"]: r["now"] for r in rows
-                                                     if not r["fixed"] and r["seen"]})}
+                                                     if not r["fixed"] and r["seen"] and not r["uncertain"]})}
 
 
 def main_measure(args) -> int:

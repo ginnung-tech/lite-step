@@ -90,7 +90,7 @@ def test_one_picture_of_the_true_frame_measures_the_guessed_script():
     assert abs(got["POST"]["now"] - 290) <= 10, got["POST"]
     assert abs(got["BEAM_H"]["now"] - 300) <= 10  # true value, seen through the beam's top corners
     assert got["COLOUR_CODE"] == {"key": "COLOUR_CODE", "was": 7.0, "now": 7.0, "sigma": 0.0, "seen": False,
-                                  "fixed": False}  # nothing depends on it: kept, and said so
+                                  "fixed": False, "uncertain": False}  # nothing depends on it: kept, and said so
     assert got["HEIGHT"]["fixed"]
     assert got["HEIGHT"]["now"] == 2700
     assert res["rmsPx"] < 1.0
@@ -174,3 +174,38 @@ def test_labels_one_post_off_fail_the_line_check_and_the_picture_is_not_trusted(
     good = measure(THREE, _picture(truth, THREE_FEATURES, cam), ["HEIGHT"], 1200, 900, ROOT,
                    keys=["SPAN", "POST", "BEAM_H"])
     assert good["labelChecks"] == []  # a line the structure makes, not one the guessed sizes make by chance
+
+
+# -- a fit far off the model is not a measurement (staging 2026-11-26: 42 and 99 px came back "ok") ---------
+
+
+def test_a_fit_whose_points_miss_the_model_is_a_poor_fit_not_ok():
+    # the beam's corners sit 80 px to the side of where any span, post or camera can put them: like the shed held
+    # at fixed coordinates in Gróa's script, an element the photo disagrees with and no size can move
+    truth = with_dimensions(THREE, read_dimensions(THREE), {"SPAN": 4200, "POST": 290})
+    cam = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
+    pts = _picture(truth, THREE_FEATURES, cam)
+    for p in pts:
+        if p["feature"].startswith("beam:"):
+            p["px"] = [p["px"][0] + 80.0, p["px"][1]]
+    res = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST", "BEAM_H"], drop=False)
+    assert res["rmsPx"] > res.get("poorFitPx", 15) and res["verdict"] == "poor_fit", (res["rmsPx"], res["verdict"])
+    good = measure(THREE, _picture(truth, THREE_FEATURES, cam), ["HEIGHT"], 1200, 900, ROOT,
+                   keys=["SPAN", "POST", "BEAM_H"])
+    assert good["verdict"] == "ok"  # the same frame, every point where the model can put it
+
+
+def test_an_uncertain_size_is_flagged_and_never_written_into_the_script(monkeypatch):
+    import tools.survey.measure as m
+
+    truth = with_dimensions(THREE, read_dimensions(THREE), {"SPAN": 4200, "POST": 290})
+    cam = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
+    pts = _picture(truth, THREE_FEATURES, cam)
+    certain = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST"])
+    assert not any(r["uncertain"] for r in certain["dimensions"])
+    assert {d.key: d.value for d in read_dimensions(certain["edited"])}["SPAN"] != 3000
+    monkeypatch.setattr(m, "UNCERTAIN_FRACTION", 0.0)  # every spread now counts as too large
+    res = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST"])
+    flagged = {r["key"] for r in res["dimensions"] if r["uncertain"]}
+    assert flagged == {"SPAN", "POST"}  # seen and free; the held HEIGHT never is
+    assert {d.key: d.value for d in read_dimensions(res["edited"])}["SPAN"] == 3000  # left as it was
