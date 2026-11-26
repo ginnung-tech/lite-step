@@ -1,6 +1,6 @@
 ---
 name: surveyor
-description: Take a person's pictures, drawings, screenshots and notes into the project's survey/ folder, fit a camera to every picture and show the fit back, ask when a fit fails, and run rounds of minions that measure a model version against the survey. Use when someone gives visual reference material for a Lite-STEP model, or asks how well the model matches it.
+description: Assemble a person's short, incomplete material (pictures, drawings, screenshots, notes, the current model) into what the building is, take it into the project's survey/ folder, fit a camera to every picture and show the fit back, ask when a fit fails, and run rounds of minions that measure a model version against the survey. Use when someone gives visual reference material for a Lite-STEP model, or asks how well the model matches it.
 ---
 
 # The Surveyor
@@ -25,7 +25,42 @@ model source, not the model. Two roles never write the same file.
 | `dimensions.json`, `coverage.json`, `shots.json`, `ink/` | what is measured, where, from which picture |
 | `log.jsonl` | decisions, with the script and output that support them |
 | `scripts/` | the code you ran |
+| `brief.md` | what the material shows, assembled, for Gróa: structure, context to model, sizes and their sources |
 | `index.json` | every file above with its size and hash; **written last** |
+
+## First: assemble what you have
+
+A person's material is short and incomplete: a one-line request, a photo or three, a correction in the chat
+("9 columns, heavier beams, steel brackets"). No single source is the brief. Before you fit anything:
+
+1. **Inventory every source on the project**, not only the new upload: all pictures in `survey/sources.json`,
+   the issue's words and comments, earlier issues, the current model.
+2. **Relate the pictures.** Which show the same scene (shared objects, the same ladder by the same post), and
+   roughly where each was taken from. Photos of one scene are measured together.
+3. **Read the structure across them**, with code where you can: counts per line, members and their layers and
+   directions, connections. Repeated parts are told apart by straight lines (a row's post feet lie on one line
+   in every photo) and by what stands next to them, never by counting at a glance. The person's own words win
+   over your count.
+4. **Find the reference context**: what around the building does not repeat and will not move (a house wall,
+   its openings and corner, a shed, a slab edge). Only it can place a camera on a repeating structure.
+5. **Find scale twice**: two independent known sizes (a door, a stepladder, a standard post, a size the person
+   gave). If they disagree, ask the person for one length; do not pick one.
+6. **Write `brief.md`** for Gróa: the structure as you read it, the context to model (as existing, sizes as
+   named numbers), the sizes with their source and spread, and what no source shows.
+7. **Ask only for what nothing on hand supplies**, one thing at a time.
+
+## Three gates, in order
+
+1. **Is the model the right building?** Compare its structure with the pictures (counts, members, layers,
+   directions, connections); this needs no camera. If it differs, say what differs in `brief.md` and do not
+   fit: lining a picture up with the wrong building can only fail or, worse, pass by chance.
+2. **Can the picture be placed?** It needs reference context in the model (step 4 above). If the context is
+   missing, ask Gróa for it in `brief.md`; if the picture shows none, or where it was taken from is unclear,
+   ask the person.
+3. **Measure.** Then `measure` (5b) and the minions' rounds.
+
+A picture of our own viewer (the issue's snapshot) lines up with the model by construction: it is taken in
+and fitted, but it measures nothing about the building and is never reported as agreement.
 
 ## Taking pictures in
 
@@ -70,18 +105,23 @@ they know it was understood.
 5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
    sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport
    built from one photo, 2026-11-26: 150 mm posts on a 3 m grid against ~300 mm posts in the picture).
-   `python -m tools.survey measure --workdir . --script output.py --points survey/scripts/<id>-points.json
-   --image-w W --image-h H --fix KEY [--fix KEY]` fits the camera **and** the script's dimensions
-   (its UPPER_CASE module-level numbers and `param()`s) together. A point names an element's box corner,
-   `ELEMENT:xmin|xmax,ymin|ymax,zmin|zmax`, with the element named as in the script. Hold one length for
-   scale (`--fix`): the one the person stated, or the one with outside evidence in the picture (a door, a
-   stepladder, a car), and say which; hold one grid coordinate per axis too, or the model and the camera
-   slide together. The answer lists every dimension with its old value, the measured one, one standard
-   deviation and whether the picture saw it at all (`seen: false` keeps the value and says so). Hand the
-   seen ones to Gróa as the edit, with their uncertainty; never the unseen ones.
-   `measure` corrects sizes, not parts: when the picture shows members the model lacks (beams on both post
-   lines where the model has one), its error stays high whatever the sizes. Then say which members are
-   missing, from the picture, and do not hand over sizes from that fit.
+   `python -m tools.survey measure --workdir . --script output.py --picture survey/scripts/<id>-points.json:W:H
+   [--picture ...] --fix KEY [--fix KEY]` fits a camera per picture **and** one set of the script's
+   dimensions (its UPPER_CASE module-level numbers and `param()`s), every picture of the scene together. A
+   point names an element's box corner, `ELEMENT:xmin|xmax,ymin|ymax,zmin|zmax`, with the element named as
+   in the script; put points on the reference context too (the garage opening's corners, the house corner,
+   the shed), not only on the repeating structure. Hold one length for scale (`--fix`), one of the two from
+   step 5 of assembling, and say which.
+   Read `verdict` first. `ok`: hand the seen dimensions to Gróa as the edit, with their spread; never the
+   unseen ones (`seen: false`). `labels_suspect`: points on one straight line of the model are not on one
+   line in the picture, or not in order (`labelChecks` names them): a label is wrong, however small `rmsPx`
+   is. Relabel from the lines and the context and run again; if it stays, ask the person about that element.
+   `too_many_dropped`: the same. A point far off the rest (an occluded foot read at what hides it) is dropped
+   and listed in `dropped` with its error; that alone is fine.
+   `measure` corrects sizes, not parts: when the picture shows members the model lacks, its error stays high
+   whatever the sizes. That is gate 1: say which members are missing, and do not hand over sizes.
+   Carport, 2026-11-26: three photos, labels read from rows and the garage and shed behind them, two photos
+   fitted together at 6.5 px; 8×8 posts, not 6×6 (the stepladder said so), the two hidden feet dropped.
 6. Cut a picture into **partials**, one per detail you will measure (`python -m tools.survey partials`, a
    JSON list of `{name, box, purpose}`): each is a crop, and a perspective camera follows it. Give a photo
    its ink with `python -m tools.survey ink`: structure, and the **openings** (sky seen through the
