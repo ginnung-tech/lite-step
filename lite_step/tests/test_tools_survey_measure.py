@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT))
 
 from tools.survey import PerspectiveCamera  # noqa: E402
 from tools.survey.measure import (  # noqa: E402
-    MeasureError, corners, compile_script, feature_point, measure, read_dimensions, with_dimensions,
+    MeasureError, corners, compile_script, feature_point, measure, measure_many, read_dimensions,
+    with_dimensions,
 )
 
 SCRIPT = '''"""Two posts and a beam."""
@@ -109,3 +110,67 @@ def test_it_refuses_what_cannot_give_a_measurement():
         measure(script, [{"px": [1, 2], "feature": "post_a:left"}] * 6, ["HEIGHT"], 1200, 900, ROOT)
     with pytest.raises(MeasureError, match="no element named"):
         measure(script, [{"px": [1, 2], "feature": "roof:xmin,ymin,zmin"}] * 6, ["HEIGHT"], 1200, 900, ROOT)
+
+
+# -- several pictures, dropped points, label checks (carport, 2026-11-26) -----------------------------------
+
+THREE = SCRIPT.replace('(("post_a", 0), ("post_b", SPAN))', '(("post_a", 0), ("post_m", SPAN // 2), ("post_b", SPAN))')
+FEET = [f"{p}:{x},{y},zmin" for p in ("post_a", "post_m", "post_b") for x, y in (("xmin", "ymin"), ("xmax", "ymin"))]
+TOPS = [f"{p}:xmin,ymin,zmax" for p in ("post_a", "post_m", "post_b")]
+THREE_FEATURES = FEET + TOPS + ["beam:xmin,ymin,zmax", "beam:xmax,ymin,zmax", "beam:xmax,ymax,zmax"]
+
+
+def _picture(script: str, features: list[str], cam: PerspectiveCamera) -> list[dict]:
+    els = {f.split(":", 1)[0] for f in features}
+    boxes = corners(compile_script(script, ROOT), els)
+    px = cam.project(np.array([feature_point(boxes, f) for f in features]))
+    return [{"px": p.tolist(), "feature": f} for p, f in zip(px, features)]
+
+
+def test_two_pictures_of_one_scene_give_one_set_of_sizes_and_a_camera_each():
+    truth = with_dimensions(THREE, read_dimensions(THREE), {"SPAN": 4200, "POST": 290})
+    left = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
+    right = PerspectiveCamera.look_at((6.5, -5.0, 1.5), (2.0, 0.0, 1.4), 60.0, 900, 1200)
+    res = measure_many(THREE, [{"name": "left", "points": _picture(truth, THREE_FEATURES, left), "w": 1200, "h": 900},
+                               {"name": "right", "points": _picture(truth, THREE_FEATURES, right), "w": 900,
+                                "h": 1200}], ["HEIGHT"], ROOT, keys=["SPAN", "POST", "BEAM_H"])
+    got = {r["key"]: r for r in res["dimensions"]}
+    assert abs(got["SPAN"]["now"] - 4200) <= 30 and abs(got["POST"]["now"] - 290) <= 10
+    assert [p["name"] for p in res["pictures"]] == ["left", "right"]
+    assert all(p["rmsPx"] < 1.0 and p["verdict"] == "ok" and not p["dropped"] for p in res["pictures"])
+    assert res["verdict"] == "ok"
+    eyes = [p["camera"]["viewPoint"] for p in res["pictures"]]
+    assert abs(eyes[0][0] - -2.5) < 0.2 and abs(eyes[1][0] - 6.5) < 0.2  # each picture keeps its own camera
+
+
+def test_a_point_far_off_the_rest_is_dropped_and_reported_and_the_fit_holds():
+    truth = with_dimensions(THREE, read_dimensions(THREE), {"SPAN": 4200, "POST": 290})
+    cam = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
+    pts = _picture(truth, THREE_FEATURES, cam)
+    pts[3]["px"] = [pts[3]["px"][0], pts[3]["px"][1] - 80.0]  # a foot read at the edge of what hides it
+    res = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST", "BEAM_H"])
+    assert [d["index"] for d in res["dropped"]] == [3]
+    assert res["residualPx"][3] > 40  # still reported, under the final fit: the reason it went
+    assert res["rmsPx"] < 1.0 and res["verdict"] == "ok"
+    assert abs({r["key"]: r for r in res["dimensions"]}["SPAN"]["now"] - 4200) <= 30
+    kept = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST", "BEAM_H"], drop=False)
+    assert kept["dropped"] == [] and kept["rmsPx"] > 5  # and without dropping, the error shows
+
+
+def test_labels_one_post_off_fail_the_line_check_and_the_picture_is_not_trusted():
+    truth = with_dimensions(THREE, read_dimensions(THREE), {"SPAN": 4200, "POST": 290})
+    cam = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
+    pts = _picture(truth, THREE_FEATURES, cam)
+    # the middle post's feet named as the first post's and the reverse: every pixel right, two labels wrong
+    for p in pts:
+        el, rest = p["feature"].split(":", 1)
+        if rest.endswith("zmin") and el in ("post_a", "post_m"):
+            p["feature"] = {"post_a": "post_m", "post_m": "post_a"}[el] + ":" + rest
+    res = measure(THREE, pts, ["HEIGHT"], 1200, 900, ROOT, keys=["SPAN", "POST", "BEAM_H"])
+    assert res["labelChecks"], "the feet are no longer on one line in label order"
+    assert res["verdict"] == "labels_suspect"
+    named = {f.split(":", 1)[0] for c in res["labelChecks"] for f in c["features"]}
+    assert {"post_a", "post_m"} <= named
+    good = measure(THREE, _picture(truth, THREE_FEATURES, cam), ["HEIGHT"], 1200, 900, ROOT,
+                   keys=["SPAN", "POST", "BEAM_H"])
+    assert good["labelChecks"] == []  # a line the structure makes, not one the guessed sizes make by chance

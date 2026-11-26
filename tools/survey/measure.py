@@ -16,6 +16,14 @@ One picture cannot tell a small carport near the lens from a big one far away: a
 held (``fixed``), the one the person stated or the one with the best outside evidence (a stepladder, a door).
 Dimensions no point depends on keep their value (a weak pull to the old value, which the result reports as
 ``seen: false``), so the answer never invents a size the picture does not show.
+
+Several pictures of one scene are fitted together (``measure_many``): one set of dimensions, a camera each.
+Before the fit, points that lie on one straight line in the model (a row of post feet) must lie on one line in
+the picture: a point that does not is named (``labelChecks``), because what goes wrong is the label, not the
+pixel. After it, a point far worse than the rest (an occluded foot read at the trailer's edge) is dropped and
+the fit repeated, at most a fifth of a picture's points, each reported with its error (``dropped``). Carport,
+2026-11-26: two photos, labelled by rows, with the house and the shed as reference points, fitted to 6 px each
+and agreed on every size within their spread.
 """
 from __future__ import annotations
 
@@ -200,21 +208,51 @@ class Measurement:
     rms_px: float
 
 
+@dataclass
+class Picture:
+    """One picture's control points: pixels, the features they name (rows of the sensitivity), its size."""
+
+    px: np.ndarray  # (P, 2)
+    rows: np.ndarray  # (P,) indices into Sensitivity.base
+    w: int
+    h: int
+
+
+@dataclass
+class Joint:
+    cameras: list[PerspectiveCamera]
+    values: dict[str, float]
+    sigma: dict[str, float]
+    seen: dict[str, bool]
+    residual_px: list[list[float]]  # per picture, per point
+    rms_px: list[float]
+
+
 def solve(px: np.ndarray, sens: Sensitivity, current: dict[str, float], fixed: set[str], w: int, h: int,
           prior_frac: float = 0.5, iterations: int = 60) -> Measurement:
-    """Least squares on camera (rotation, position, focal length) and the free dimensions.
-
-    A dimension no point depends on is not solved for. The free ones carry a weak prior to their current value
-    (`prior_frac` of the larger of the value and the model's typical size, as one standard deviation)."""
+    """One picture: least squares on its camera (rotation, position, focal length) and the free dimensions."""
     px = np.asarray(px, dtype=np.float64)
     if len(px) != len(sens.base):
         raise MeasureError("one pixel per feature")
+    j = solve_many([Picture(px, np.arange(len(px)), w, h)], sens, current, fixed, prior_frac, iterations)
+    return Measurement(j.cameras[0], j.values, j.sigma, j.seen, j.residual_px[0], j.rms_px[0])
+
+
+def solve_many(pics: list[Picture], sens: Sensitivity, current: dict[str, float], fixed: set[str],
+               prior_frac: float = 0.5, iterations: int = 80) -> Joint:
+    """Least squares on a camera per picture and ONE set of free dimensions.
+
+    A dimension no point of any picture depends on is not solved for. The free ones carry a weak prior to their
+    current value (`prior_frac` of the larger of the value and the model's typical size, as one standard
+    deviation)."""
     if not fixed:
-        raise MeasureError("hold at least one dimension: one picture cannot give scale")
-    if len(px) < 6:
-        raise MeasureError("measuring needs at least six control points")
+        raise MeasureError("hold at least one dimension: pictures cannot give scale")
+    for k, pic in enumerate(pics):
+        if len(pic.px) < 6:
+            raise MeasureError(f"picture {k + 1}: measuring needs at least six control points")
     col = {k: i for i, k in enumerate(sens.keys)}
-    seen = {k: bool(np.abs(sens.jac[:, :, col[k]]).max() > 1e-9) for k in sens.keys}
+    used = np.unique(np.concatenate([pic.rows for pic in pics]))
+    seen = {k: bool(np.abs(sens.jac[used][:, :, col[k]]).max() > 1e-9) for k in sens.keys}
     free = [k for k in sens.keys if k not in fixed and seen[k]]
     d0 = np.array([current[k] for k in free])
     jf = sens.jac[:, :, [col[k] for k in free]]
@@ -223,24 +261,87 @@ def solve(px: np.ndarray, sens: Sensitivity, current: dict[str, float], fixed: s
     # because millimetres next to radians make the normal equations useless (the carport stalled at 55 px)
     typical = float(np.median([abs(v) for v in current.values() if abs(v) > 1.0] or [1000.0]))
     sig = np.maximum(np.abs(d0), typical) * prior_frac
+    nc = 7 * len(pics)
+
+    def project_all(v: np.ndarray) -> list[np.ndarray]:
+        world = sens.base + jf @ (v[nc:] * sig)
+        return [_project(v[7 * k:7 * k + 3], v[7 * k + 3:7 * k + 6], math.exp(v[7 * k + 6]), pic.w, pic.h,
+                         world[pic.rows]) for k, pic in enumerate(pics)]
 
     def resid(v: np.ndarray) -> np.ndarray:
-        world = sens.base + jf @ (v[7:] * sig)
-        uv = _project(v[0:3], v[3:6], math.exp(v[6]), w, h, world)
-        return np.concatenate([(uv - px).ravel(), v[7:]])
+        return np.concatenate([(uv - pic.px).ravel() for uv, pic in zip(project_all(v), pics)] + [v[nc:]])
 
-    x0 = np.concatenate([_camera_vector(fit_perspective(sens.base, px, w, h).camera), np.zeros(len(free))])
+    x0 = np.concatenate([_camera_vector(fit_perspective(sens.base[pic.rows], pic.px, pic.w, pic.h).camera)
+                         for pic in pics] + [np.zeros(len(free))])
     x, r, jac = _levenberg_marquardt(resid, x0, iterations)
-    pix = r[:2 * len(px)].reshape(-1, 2)
-    err = np.linalg.norm(pix, axis=1)
-    sd = _spread(jac, pix, 7 + len(free))[7:] * sig
+    n_px = sum(len(pic.px) for pic in pics)
+    pix = r[:2 * n_px].reshape(-1, 2)
+    sd = _spread(jac, pix, nc + len(free))[nc:] * sig
     values = {k: current[k] for k in sens.keys}
     sigma = dict.fromkeys(sens.keys, 0.0)
     for i, k in enumerate(free):
-        values[k] = float(d0[i] + x[7 + i] * sig[i])
+        values[k] = float(d0[i] + x[nc + i] * sig[i])
         sigma[k] = float(sd[i])
-    return Measurement(_camera_from_vector(x, w, h), values, sigma, seen, err.round(2).tolist(),
-                       float(np.sqrt((err ** 2).mean())))
+    errs = [np.linalg.norm(uv - pic.px, axis=1) for uv, pic in zip(project_all(x), pics)]
+    return Joint([_camera_from_vector(x[7 * k:7 * k + 7], pic.w, pic.h) for k, pic in enumerate(pics)], values,
+                 sigma, seen, [e.round(2).tolist() for e in errs], [float(np.sqrt((e ** 2).mean())) for e in errs])
+
+
+def structure_variants(sens: Sensitivity, current: dict[str, float], share: float = 0.2) -> list[np.ndarray]:
+    """The named corners as the model has them, and once more per dimension changed by `share` of its value (at
+    least 100 units): what holds in all of them holds for any sizes, i.e. it is structure, not a guess."""
+    out = [sens.base]
+    for j, k in enumerate(sens.keys):
+        out.append(sens.base + sens.jac[:, :, j] * max(abs(current[k]) * share, 100.0))
+    return out
+
+
+def _collinear(world: np.ndarray, a: int, b: int, c: int, tol: float) -> bool:
+    d = world[c] - world[a]
+    span = float(np.linalg.norm(d))
+    if span < 1e-6:
+        return False
+    t = float((world[b] - world[a]) @ d) / span ** 2
+    return 0.05 < t < 0.95 and float(np.linalg.norm(world[a] + t * d - world[b])) <= tol * span
+
+
+def label_checks(worlds: list[np.ndarray], px: np.ndarray, features: list[str], tol_world: float = 0.01,
+                 tol_px_frac: float = 0.03, min_px: float = 4.0, limit: int = 10) -> list[dict]:
+    """Points on one straight line in the model must be on one line in the picture (a projection keeps lines).
+
+    For every three points of three different elements that are collinear in every one of `worlds` (the middle
+    one within `tol_world` of the span from the line through the other two, and between them; see
+    `structure_variants`, so a line the guessed sizes make by chance does not count): the middle one's distance
+    in the picture from the line through the other two. More than `tol_px_frac` of their span and `min_px`, and
+    one of the three is mislabelled; so it is when the middle one is not between the other two in the picture
+    (``outOfOrder``: a projection keeps the order along a line). Out of order first, then the farthest off the
+    line, at most `limit`."""
+    els = [f.split(":", 1)[0] for f in features]
+    out = []
+    n = len(features)
+    for a in range(n):
+        for c in range(a + 1, n):
+            e = px[c] - px[a]
+            span_px = float(np.linalg.norm(e))
+            if span_px < 1e-6 or els[a] == els[c]:
+                continue
+            for b in range(n):
+                if b in (a, c) or els[b] in (els[a], els[c]):
+                    continue
+                if not all(_collinear(w, a, b, c, tol_world) for w in worlds):
+                    continue
+                # a projection keeps the order along a line too: labels swapped within a row stay on the line
+                s = float((px[b] - px[a]) @ e) / span_px ** 2
+                if not -0.02 < s < 1.02:
+                    out.append({"features": [features[a], features[b], features[c]], "offLinePx": 0.0,
+                                "outOfOrder": True})
+                    continue
+                off = abs(float(e[0] * (px[b][1] - px[a][1]) - e[1] * (px[b][0] - px[a][0]))) / span_px
+                if off > max(min_px, tol_px_frac * span_px):
+                    out.append({"features": [features[a], features[b], features[c]], "offLinePx": round(off, 1),
+                                "outOfOrder": False})
+    out.sort(key=lambda r: (not r["outOfOrder"], -r["offLinePx"]))
+    return out[:limit]
 
 
 def _camera_vector(cam: PerspectiveCamera) -> np.ndarray:
@@ -305,11 +406,45 @@ def _spread(jac: np.ndarray, pix: np.ndarray, n_params: int) -> np.ndarray:
 
 
 def measure(source: str, points: list[dict], fixed: list[str], image_w: int, image_h: int,
-            lite_step_root: str | os.PathLike, keys: list[str] | None = None) -> dict:
-    """The whole step on a script's text: `points` are ``[{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]``.
+            lite_step_root: str | os.PathLike, keys: list[str] | None = None, drop: bool = True) -> dict:
+    """The whole step on one picture: `points` are ``[{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]``.
 
     Returns the measured dimensions, ready to become an edit for Gróa: each with its old value, the measured
     one, one standard deviation, and whether the picture saw it at all."""
+    r = measure_many(source, [{"name": "", "points": points, "w": image_w, "h": image_h}], fixed, lite_step_root,
+                     keys, drop)
+    p = r["pictures"][0]
+    return {"dimensions": r["dimensions"], "verdict": p["verdict"], "camera": p["camera"], "rmsPx": p["rmsPx"],
+            "residualPx": p["residualPx"], "dropped": p["dropped"], "labelChecks": p["labelChecks"],
+            "edited": r["edited"]}
+
+
+def _drop_next(errs: list[list[float]], keep: list[np.ndarray], budget: list[int],
+               floor_px: float) -> tuple[int, int] | None:
+    """The point to drop next, (picture, position among its kept points), or None: the worst error of all
+    pictures, when it is above `floor_px` and three times its picture's median, and that picture may still drop
+    one (a budget left, and more than six points)."""
+    best = None
+    for k, e in enumerate(errs):
+        if budget[k] <= 0 or len(keep[k]) <= 6:
+            continue
+        e = np.asarray(e)
+        i = int(np.argmax(e))
+        if e[i] > max(floor_px, 3.0 * float(np.median(e))) and (best is None or e[i] > best[2]):
+            best = (k, i, float(e[i]))
+    return None if best is None else (best[0], best[1])
+
+
+def measure_many(source: str, pictures: list[dict], fixed: list[str], lite_step_root: str | os.PathLike,
+                 keys: list[str] | None = None, drop: bool = True, floor_px: float = 10.0) -> dict:
+    """Several pictures of one scene, ``[{"name", "points": [{"px", "feature"}], "w", "h"}]``: one set of
+    dimensions, a camera per picture.
+
+    Returns the measured dimensions (old value, measured, one standard deviation, seen by any picture) and per
+    picture: its camera, every point's error under the final fit (dropped points too, so the reason shows), the
+    points dropped, and the label checks; with the edited script."""
+    if not pictures:
+        raise MeasureError("no pictures")
     dims = read_dimensions(source)
     known = {d.key for d in dims}
     if not dims:
@@ -322,13 +457,36 @@ def measure(source: str, points: list[dict], fixed: list[str], image_w: int, ima
     if unknown:
         raise MeasureError(f"not dimensions of the script: {', '.join(unknown)}")
     current = {d.key: d.value for d in dims}
-    feats = [p["feature"] for p in points]
-    px = np.array([p["px"] for p in points], dtype=np.float64)
+    feats: list[str] = []
+    for pic in pictures:
+        for pt in pic["points"]:
+            if pt["feature"] not in feats:
+                feats.append(pt["feature"])
     sens = sensitivity(source, dims, [k for k in keys if k not in set(fixed)], feats, lite_step_root)
     # fixed dimensions sit outside the jacobian; the solver only needs their names to know scale is pinned
     sens_all = Sensitivity(sens.keys + list(fixed), sens.base,
                            np.concatenate([sens.jac, np.zeros((len(feats), 3, len(fixed)))], axis=2))
-    m = solve(px, sens_all, current, set(fixed), image_w, image_h)
+    full = [Picture(np.array([p["px"] for p in pic["points"]], dtype=np.float64),
+                    np.array([feats.index(p["feature"]) for p in pic["points"]]), int(pic["w"]), int(pic["h"]))
+            for pic in pictures]
+    variants = structure_variants(sens, current)
+    checks = [label_checks([v[f.rows] for v in variants], f.px, [p["feature"] for p in pic["points"]])
+              for f, pic in zip(full, pictures)]
+    keep = [np.arange(len(f.px)) for f in full]
+    budget = [len(f.px) // 5 if drop else 0 for f in full]
+    dropped: list[list[dict]] = [[] for _ in full]
+    while True:
+        m = solve_many([Picture(f.px[kp], f.rows[kp], f.w, f.h) for f, kp in zip(full, keep)], sens_all, current,
+                       set(fixed))
+        nxt = _drop_next(m.residual_px, keep, budget, floor_px)
+        if nxt is None:
+            break
+        k, i = nxt
+        idx = int(keep[k][i])
+        pt = pictures[k]["points"][idx]
+        dropped[k].append({"index": idx, "feature": pt["feature"], "px": pt["px"], "residualPx": m.residual_px[k][i]})
+        keep[k] = np.delete(keep[k], i)
+        budget[k] -= 1
     by_key = {d.key: d for d in dims}
     rows = []
     for k in sens_all.keys:
@@ -337,25 +495,61 @@ def measure(source: str, points: list[dict], fixed: list[str], image_w: int, ima
             now = float(int(round(now)))
         rows.append({"key": k, "was": was, "now": now, "sigma": round(m.sigma[k], 1),
                      "seen": m.seen[k] if k not in fixed else True, "fixed": k in fixed})
-    return {"dimensions": rows, "camera": m.camera.to_contract(), "rmsPx": round(m.rms_px, 2),
-            "residualPx": m.residual_px,
+    delta = np.array([m.values[k] - current[k] for k in sens_all.keys])
+    world = sens_all.base + sens_all.jac @ delta
+    out = []
+    for f, pic, cam, kp, dr, ck, left in zip(full, pictures, m.cameras, keep, dropped, checks, budget):
+        err = np.linalg.norm(cam.project(world[f.rows]) - f.px, axis=1)
+        # dropping hides a wrong label as well as an occluded point (carport, labels one column off: six points
+        # dropped and 5.4 px, better than the true labels' 6.7), so a failed line check or a used-up budget
+        # makes the whole picture untrusted, however small its error. A check is explained by a point dropped
+        # alone from its element (one pixel misread, an occluded foot); a wrong label moves a whole element.
+        per_el: dict[str, int] = {}
+        for d in dr:
+            el = d["feature"].split(":", 1)[0]
+            per_el[el] = per_el.get(el, 0) + 1
+        lone = {d["feature"] for d in dr if per_el[d["feature"].split(":", 1)[0]] == 1}
+        for c in ck:
+            c["explained"] = any(f in lone for f in c["features"])
+        verdict = ("labels_suspect" if any(not c["explained"] for c in ck)
+                   else "too_many_dropped" if drop and dr and left == 0 else "ok")
+        out.append({"name": pic.get("name", ""), "verdict": verdict, "camera": cam.to_contract(),
+                    "rmsPx": round(float(np.sqrt((err[kp] ** 2).mean())), 2), "residualPx": err.round(2).tolist(),
+                    "dropped": dr, "labelChecks": ck})
+    return {"dimensions": rows, "pictures": out,
+            "verdict": "ok" if all(p["verdict"] == "ok" for p in out) else "untrusted",
             "edited": with_dimensions(source, dims, {r["key"]: r["now"] for r in rows
                                                      if not r["fixed"] and r["seen"]})}
 
 
 def main_measure(args) -> int:
-    """CLI: ``python -m tools.survey measure --workdir DIR --script output.py --points pts.json --image-w W
-    --image-h H --fix KEY [--fix KEY] [--keys A,B] [--write edited.py]``. Every path is inside the working
-    directory. Prints the result without the edited script."""
+    """CLI: ``python -m tools.survey measure --workdir DIR --script output.py (--picture PTS.json:W:H [--picture
+    ...] | --points PTS.json --image-w W --image-h H) --fix KEY [--fix KEY] [--keys A,B] [--keep-all]
+    [--write edited.py]``. Every path is inside the working directory. Prints the result without the script."""
     from .intake import confined
 
-    with open(confined(args.workdir, args.points), encoding="utf-8") as fh:
-        pts = json.load(fh)
     with open(confined(args.workdir, args.script), encoding="utf-8") as fh:
         source = fh.read()
+    specs = []
+    for spec in args.picture or []:
+        rest, _, h = spec.rpartition(":")
+        path, _, w = rest.rpartition(":")
+        if not path or not w.isdigit() or not h.isdigit():
+            raise MeasureError(f"--picture {spec!r} is not POINTS.json:W:H")
+        specs.append((path, int(w), int(h)))
+    if args.points:
+        if not (args.image_w and args.image_h):
+            raise MeasureError("--points needs --image-w and --image-h")
+        specs.append((args.points, args.image_w, args.image_h))
+    if not specs:
+        raise MeasureError("give --picture POINTS.json:W:H (repeatable), or --points with --image-w and --image-h")
+    pictures = []
+    for path, w, h in specs:
+        with open(confined(args.workdir, path), encoding="utf-8") as fh:
+            pictures.append({"name": path, "points": json.load(fh), "w": w, "h": h})
     root = Path(__file__).resolve().parents[2]
-    res = measure(source, pts, args.fix, args.image_w, args.image_h, root,
-                  args.keys.split(",") if args.keys else None)
+    res = measure_many(source, pictures, args.fix, root, args.keys.split(",") if args.keys else None,
+                       drop=not args.keep_all)
     if args.write:
         with open(confined(args.workdir, args.write), "w", encoding="utf-8") as fh:
             fh.write(res["edited"])

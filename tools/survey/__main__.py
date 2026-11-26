@@ -4,7 +4,7 @@ python -m tools.survey index --workdir DIR
 python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
-python -m tools.survey measure --workdir DIR --script output.py --points PTS.json --image-w W --image-h H --fix KEY [--write OUT.py]"""
+python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]"""
 
 from __future__ import annotations
 
@@ -59,9 +59,12 @@ def main(argv: list[str] | None = None) -> int:
     mea = sub.add_parser("measure", help="a first build from a picture: fit the camera AND the script's dimensions")
     mea.add_argument("--workdir", default=".")
     mea.add_argument("--script", required=True, help="the model script (its UPPER_CASE numbers are the dimensions)")
-    mea.add_argument("--points", required=True, help='JSON [{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]')
-    mea.add_argument("--image-w", type=int, required=True)
-    mea.add_argument("--image-h", type=int, required=True)
+    mea.add_argument("--points", help='one picture: JSON [{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]')
+    mea.add_argument("--image-w", type=int)
+    mea.add_argument("--image-h", type=int)
+    mea.add_argument("--picture", action="append",
+                     help="POINTS.json:W:H, one per picture of the same scene, all fitted together (repeatable)")
+    mea.add_argument("--keep-all", action="store_true", help="never drop a point, however far off it lies")
     mea.add_argument("--fix", action="append", required=True, help="a dimension held for scale (repeatable)")
     mea.add_argument("--keys", help="only these dimensions (comma-separated); default all")
     mea.add_argument("--write", help="write the script with the measured dimensions here")
