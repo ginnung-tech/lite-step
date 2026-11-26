@@ -3,7 +3,8 @@ python -m tools.survey add --workdir DIR --picture FILE --kind KIND --title T [-
 python -m tools.survey index --workdir DIR
 python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
-python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID"""
+python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
+python -m tools.survey measure --script model.py --points PTS.json --image-w W --image-h H --fix KEY [--write OUT.py]"""
 
 from __future__ import annotations
 
@@ -55,10 +56,26 @@ def main(argv: list[str] | None = None) -> int:
     ink = sub.add_parser("ink", help="ink for a photo: structure (1) and openings (5, sky seen through it)")
     ink.add_argument("--workdir", default=".")
     ink.add_argument("--source", required=True)
+    mea = sub.add_parser("measure", help="a first build from a picture: fit the camera AND the script's dimensions")
+    mea.add_argument("--script", required=True, help="the model script (its UPPER_CASE numbers are the dimensions)")
+    mea.add_argument("--points", required=True, help='JSON [{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]')
+    mea.add_argument("--image-w", type=int, required=True)
+    mea.add_argument("--image-h", type=int, required=True)
+    mea.add_argument("--fix", action="append", required=True, help="a dimension held for scale (repeatable)")
+    mea.add_argument("--keys", help="only these dimensions (comma-separated); default all")
+    mea.add_argument("--write", help="write the script with the measured dimensions here")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.cmd == "add":
         return _add(args)
+    if args.cmd == "measure":
+        from .measure import main_measure
+
+        try:
+            return main_measure(args)
+        except (ValueError, OSError) as e:  # MeasureError is a ValueError
+            print(json.dumps({"error": str(e)}))
+            return 2
     if args.cmd == "answer":
         from .intake import answer_align
 

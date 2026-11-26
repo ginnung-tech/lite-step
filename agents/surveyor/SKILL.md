@@ -67,6 +67,21 @@ they know it was understood.
    when they pick one, `python -m tools.survey answer --question Q --choice pose-k` freezes it. Pass
    `--topic` with `add` so the question names the issue it belongs to.
 5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
+5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
+   sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport
+   built from one photo, 2026-11-26: 150 mm posts on a 3 m grid against ~300 mm posts in the picture).
+   `python -m tools.survey measure --script output.py --points survey/scripts/<id>-points.json
+   --image-w W --image-h H --fix KEY [--fix KEY]` fits the camera **and** the script's dimensions
+   (its UPPER_CASE module-level numbers and `param()`s) together. A point names an element's box corner,
+   `ELEMENT:xmin|xmax,ymin|ymax,zmin|zmax`, with the element named as in the script. Hold one length for
+   scale (`--fix`): the one the person stated, or the one with outside evidence in the picture (a door, a
+   stepladder, a car), and say which; hold one grid coordinate per axis too, or the model and the camera
+   slide together. The answer lists every dimension with its old value, the measured one, one standard
+   deviation and whether the picture saw it at all (`seen: false` keeps the value and says so). Hand the
+   seen ones to Gróa as the edit, with their uncertainty; never the unseen ones.
+   `measure` corrects sizes, not parts: when the picture shows members the model lacks (beams on both post
+   lines where the model has one), its error stays high whatever the sizes. Then say which members are
+   missing, from the picture, and do not hand over sizes from that fit.
 6. Cut a picture into **partials**, one per detail you will measure (`python -m tools.survey partials`, a
    JSON list of `{name, box, purpose}`): each is a crop, and a perspective camera follows it. Give a photo
    its ink with `python -m tools.survey ink`: structure, and the **openings** (sky seen through the
