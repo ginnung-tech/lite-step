@@ -116,8 +116,13 @@ they know it was understood.
    unseen ones (`seen: false`). `labels_suspect`: points on one straight line of the model are not on one
    line in the picture, or not in order (`labelChecks` names them): a label is wrong, however small `rmsPx`
    is. Relabel from the lines and the context and run again; if it stays, ask the person about that element.
-   `too_many_dropped`: the same. A point far off the rest (an occluded foot read at what hides it) is dropped
-   and listed in `dropped` with its error; that alone is fine.
+   `too_many_dropped`: the same. `poor_fit`: the points miss the model by more than `poorFitPx` on average, so
+   nothing it measured is a measurement; usually an element the script holds at fixed coordinates that the photo
+   disagrees with (Gróa placed the shed at numbers, not named sizes), or a member the model lacks. Find which
+   element's points carry the error (`residualPx`), then either add its position dimensions to `--keys` or leave
+   its points out, and say which in `brief.md`. A size flagged `uncertain` (its spread is over half its value) is
+   not written into the edited script and is not handed to Gróa. A point far off the rest (an occluded foot read
+   at what hides it) is dropped and listed in `dropped` with its error; that alone is fine.
    `measure` corrects sizes, not parts: when the picture shows members the model lacks, its error stays high
    whatever the sizes. That is gate 1: say which members are missing, and do not hand over sizes.
    Carport, 2026-11-26: three photos, labels read from rows and the garage and shed behind them, two photos
