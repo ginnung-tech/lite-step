@@ -4,7 +4,7 @@ python -m tools.survey index --workdir DIR
 python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
-python -m tools.survey measure --script model.py --points PTS.json --image-w W --image-h H --fix KEY [--write OUT.py]"""
+python -m tools.survey measure --workdir DIR --script output.py --points PTS.json --image-w W --image-h H --fix KEY [--write OUT.py]"""
 
 from __future__ import annotations
 
@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     ink.add_argument("--workdir", default=".")
     ink.add_argument("--source", required=True)
     mea = sub.add_parser("measure", help="a first build from a picture: fit the camera AND the script's dimensions")
+    mea.add_argument("--workdir", default=".")
     mea.add_argument("--script", required=True, help="the model script (its UPPER_CASE numbers are the dimensions)")
     mea.add_argument("--points", required=True, help='JSON [{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]')
     mea.add_argument("--image-w", type=int, required=True)

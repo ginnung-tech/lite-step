@@ -72,24 +72,27 @@ def read_dimensions(source: str) -> list[Dimension]:
     the numbers they are made of."""
     out: list[Dimension] = []
     for stmt in ast.parse(source).body:
-        if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
-            continue
-        name = stmt.targets[0].id
-        if not _NAME.match(name):
-            continue
-        value = stmt.value
-        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "param"
-                and value.args):
-            value = value.args[0]
-        items = [(name, value)]
-        if isinstance(value, (ast.Tuple, ast.List)):
-            items = [(f"{name}[{i}]", v) for i, v in enumerate(value.elts)]
-        for key, node in items:
+        for key, node in _candidates(stmt):
             num = _number(node)
-            if num is None or node.end_lineno != node.lineno:
-                continue
-            out.append(Dimension(key, num[0], num[1], node.lineno, num[2], node.end_col_offset))
+            if num is not None and node.end_lineno == node.lineno:
+                out.append(Dimension(key, num[0], num[1], node.lineno, num[2], node.end_col_offset))
     return out
+
+
+def _candidates(stmt: ast.stmt) -> list[tuple[str, ast.AST]]:
+    """The (key, value node) pairs one module-level statement could contribute: none unless it is
+    ``NAME = ...`` with an UPPER_CASE name; ``param(v, ...)`` unwrapped to ``v``; a tuple split per element."""
+    if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
+        return []
+    name = stmt.targets[0].id
+    if not _NAME.match(name):
+        return []
+    value = stmt.value
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "param" and value.args:
+        value = value.args[0]
+    if isinstance(value, (ast.Tuple, ast.List)):
+        return [(f"{name}[{i}]", v) for i, v in enumerate(value.elts)]
+    return [(name, value)]
 
 
 def with_dimensions(source: str, dims: list[Dimension], values: dict[str, float]) -> str:
@@ -108,8 +111,9 @@ def compile_script(source: str, lite_step_root: str | os.PathLike, timeout_s: fl
     """Run a model script in a fresh directory; the path of the IFC it wrote. Raises with the tail of its
     output when it fails, because a dimension that breaks the script is an answer too."""
     work = Path(tempfile.mkdtemp(prefix="measure-"))
-    script = work / "model.py"
-    script.write_text(source, encoding="utf-8")
+    script = work / "model.py"  # a fixed name in a directory made here: nothing in the path comes from input
+    with open(script, "w", encoding="utf-8") as fh:
+        fh.write(source)
     env = dict(os.environ, PYTHONPATH=str(lite_step_root))
     p = subprocess.run([sys.executable, str(script)], cwd=work, env=env, capture_output=True, text=True,
                        timeout=timeout_s)
@@ -200,10 +204,8 @@ def solve(px: np.ndarray, sens: Sensitivity, current: dict[str, float], fixed: s
           prior_frac: float = 0.5, iterations: int = 60) -> Measurement:
     """Least squares on camera (rotation, position, focal length) and the free dimensions.
 
-    The free dimensions also carry a weak prior to their current value (`prior_frac` of it as one standard
-    deviation), which only matters for a dimension no point depends on."""
-    import cv2
-
+    A dimension no point depends on is not solved for. The free ones carry a weak prior to their current value
+    (`prior_frac` of the larger of the value and the model's typical size, as one standard deviation)."""
     px = np.asarray(px, dtype=np.float64)
     if len(px) != len(sens.base):
         raise MeasureError("one pixel per feature")
@@ -213,91 +215,101 @@ def solve(px: np.ndarray, sens: Sensitivity, current: dict[str, float], fixed: s
         raise MeasureError("measuring needs at least six control points")
     col = {k: i for i, k in enumerate(sens.keys)}
     seen = {k: bool(np.abs(sens.jac[:, :, col[k]]).max() > 1e-9) for k in sens.keys}
-    # a dimension no point depends on is not solved for at all: it keeps its value, and says so
     free = [k for k in sens.keys if k not in fixed and seen[k]]
     d0 = np.array([current[k] for k in free])
-    jf = sens.jac[:, :, [col[k] for k in free]] if free else np.zeros((len(px), 3, 0))
-
-    def world(dv: np.ndarray) -> np.ndarray:
-        return sens.base + (jf @ (dv - d0)) if free else sens.base
-
-    start = fit_perspective(sens.base, px, w, h)
-    cam = start.camera
-    f0 = cam.focal_px
-    # rows: camera x (right), y (down), z (forward) in world terms (OpenCV)
-    right = np.cross(np.asarray(cam.direction), np.asarray(cam.up))
-    rot = np.array([right, -np.asarray(cam.up), np.asarray(cam.direction)])
-    rvec, _ = cv2.Rodrigues(rot)
-    tvec = -rot @ np.asarray(cam.position)
-    # one standard deviation of the prior: a share of the dimension, but never less than that share of the
-    # model's typical size, so a coordinate that happens to be 0 (a grid line on the axis) is not frozen
+    jf = sens.jac[:, :, [col[k] for k in free]]
+    # a share of the dimension, never less than that share of the model's typical size, so a coordinate that
+    # happens to be 0 (a grid line on the axis) is not frozen; the solver works in these units (u = (d-d0)/sig)
+    # because millimetres next to radians make the normal equations useless (the carport stalled at 55 px)
     typical = float(np.median([abs(v) for v in current.values() if abs(v) > 1.0] or [1000.0]))
     sig = np.maximum(np.abs(d0), typical) * prior_frac
-    # the dimensions are solved in units of their own prior width (u = (d - d0) / sig): millimetres next to
-    # radians make the normal equations useless (the 2026-11-26 carport stalled at 55 px before this)
-    x = np.concatenate([rvec.ravel(), tvec.ravel(), [math.log(f0)], np.zeros(len(free))])
 
     def resid(v: np.ndarray) -> np.ndarray:
-        uv = _project(v[0:3], v[3:6], math.exp(v[6]), w, h, world(d0 + v[7:] * sig))
+        world = sens.base + jf @ (v[7:] * sig)
+        uv = _project(v[0:3], v[3:6], math.exp(v[6]), w, h, world)
         return np.concatenate([(uv - px).ravel(), v[7:]])
 
-    lam = 1e-3
-    r = resid(x)
-    for _ in range(iterations):
-        jac = np.empty((len(r), len(x)))
-        for i in range(len(x)):
-            hstep = 1e-6 * max(1.0, abs(x[i]))
-            xp = x.copy()
-            xp[i] += hstep
-            jac[:, i] = (resid(xp) - r) / hstep
-        a = jac.T @ jac
-        g = jac.T @ r
-        while True:
-            try:
-                dx = np.linalg.solve(a + lam * np.diag(np.diag(a) + 1e-12), -g)
-            except np.linalg.LinAlgError:
-                lam *= 10
-                continue
-            xn = x + dx
-            rn = resid(xn)
-            if rn @ rn < r @ r:
-                x, r, lam = xn, rn, max(lam / 3, 1e-9)
-                break
-            lam *= 4
-            if lam > 1e9:
-                break
-        if lam > 1e9 or np.linalg.norm(dx) < 1e-10 * (1 + np.linalg.norm(x)):
-            break
-    rv, tv, focal = x[0:3], x[3:6], math.exp(x[6])
-    rot, _ = cv2.Rodrigues(rv)
-    eye = -rot.T @ tv
-    fov = math.degrees(2 * math.atan((h / 2.0) / focal))
-    camera = PerspectiveCamera(tuple(eye.tolist()), tuple(rot[2].tolist()), tuple((-rot[1]).tolist()), fov, w, h)
-    n_px = 2 * len(px)
-    pix = r[:n_px].reshape(-1, 2)
+    x0 = np.concatenate([_camera_vector(fit_perspective(sens.base, px, w, h).camera), np.zeros(len(free))])
+    x, r, jac = _levenberg_marquardt(resid, x0, iterations)
+    pix = r[:2 * len(px)].reshape(-1, 2)
     err = np.linalg.norm(pix, axis=1)
-    dof = max(1, n_px - (7 + len(free)))
-    s2 = float(pix.ravel() @ pix.ravel()) / dof
-    try:
-        cov = np.linalg.inv(jac.T @ jac) * s2
-        sd = np.sqrt(np.clip(np.diag(cov)[7:], 0, None)) * sig
-    except np.linalg.LinAlgError:
-        sd = np.full(len(free), float("inf"))
+    sd = _spread(jac, pix, 7 + len(free))[7:] * sig
     values = {k: current[k] for k in sens.keys}
-    sigma = {k: 0.0 for k in sens.keys}
+    sigma = dict.fromkeys(sens.keys, 0.0)
     for i, k in enumerate(free):
         values[k] = float(d0[i] + x[7 + i] * sig[i])
         sigma[k] = float(sd[i])
-    return Measurement(camera, values, sigma, seen, err.round(2).tolist(), float(np.sqrt((err ** 2).mean())))
+    return Measurement(_camera_from_vector(x, w, h), values, sigma, seen, err.round(2).tolist(),
+                       float(np.sqrt((err ** 2).mean())))
 
 
-def measure(script: str | os.PathLike, points: list[dict], fixed: list[str], image_w: int, image_h: int,
+def _camera_vector(cam: PerspectiveCamera) -> np.ndarray:
+    """(rvec, tvec, log focal) of a camera, OpenCV convention: rows of R are camera x (right), y (down), z."""
+    import cv2
+
+    right = np.cross(np.asarray(cam.direction), np.asarray(cam.up))
+    rot = np.array([right, -np.asarray(cam.up), np.asarray(cam.direction)])
+    rvec, _ = cv2.Rodrigues(rot)
+    return np.concatenate([rvec.ravel(), (-rot @ np.asarray(cam.position)).ravel(), [math.log(cam.focal_px)]])
+
+
+def _camera_from_vector(x: np.ndarray, w: int, h: int) -> PerspectiveCamera:
+    import cv2
+
+    rot, _ = cv2.Rodrigues(x[0:3])
+    eye = -rot.T @ x[3:6]
+    fov = math.degrees(2 * math.atan((h / 2.0) / math.exp(x[6])))
+    return PerspectiveCamera(tuple(eye.tolist()), tuple(rot[2].tolist()), tuple((-rot[1]).tolist()), fov, w, h)
+
+
+def _jacobian(resid, x: np.ndarray, r: np.ndarray) -> np.ndarray:
+    jac = np.empty((len(r), len(x)))
+    for i in range(len(x)):
+        step = 1e-6 * max(1.0, abs(x[i]))
+        xp = x.copy()
+        xp[i] += step
+        jac[:, i] = (resid(xp) - r) / step
+    return jac
+
+
+def _levenberg_marquardt(resid, x: np.ndarray, iterations: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Minimise |resid(x)|^2; returns x, the residual there and the jacobian last used."""
+    lam = 1e-3
+    r = resid(x)
+    jac = _jacobian(resid, x, r)
+    for _ in range(iterations):
+        jac = _jacobian(resid, x, r)
+        a, g = jac.T @ jac, jac.T @ r
+        improved = False
+        dx = np.zeros_like(x)
+        while lam <= 1e9 and not improved:
+            dx = np.linalg.lstsq(a + lam * np.diag(np.diag(a) + 1e-12), -g, rcond=None)[0]
+            rn = resid(x + dx)
+            if rn @ rn < r @ r:
+                x, r, lam, improved = x + dx, rn, max(lam / 3, 1e-9), True
+            else:
+                lam *= 4
+        if not improved or np.linalg.norm(dx) < 1e-10 * (1 + np.linalg.norm(x)):
+            break
+    return x, r, jac
+
+
+def _spread(jac: np.ndarray, pix: np.ndarray, n_params: int) -> np.ndarray:
+    """One standard deviation per parameter from the jacobian and the pixel residuals (inf if singular)."""
+    dof = max(1, pix.size - n_params)
+    s2 = float(pix.ravel() @ pix.ravel()) / dof
+    try:
+        return np.sqrt(np.clip(np.diag(np.linalg.inv(jac.T @ jac)) * s2, 0, None))
+    except np.linalg.LinAlgError:
+        return np.full(jac.shape[1], float("inf"))
+
+
+def measure(source: str, points: list[dict], fixed: list[str], image_w: int, image_h: int,
             lite_step_root: str | os.PathLike, keys: list[str] | None = None) -> dict:
-    """The whole step: `points` are ``[{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}, ...]``.
+    """The whole step on a script's text: `points` are ``[{"px": [x, y], "feature": "ELEMENT:xmin,ymax,zmin"}]``.
 
     Returns the measured dimensions, ready to become an edit for Gróa: each with its old value, the measured
     one, one standard deviation, and whether the picture saw it at all."""
-    source = Path(script).read_text(encoding="utf-8")
     dims = read_dimensions(source)
     known = {d.key for d in dims}
     if not dims:
@@ -332,14 +344,21 @@ def measure(script: str | os.PathLike, points: list[dict], fixed: list[str], ima
 
 
 def main_measure(args) -> int:
-    """CLI: ``python -m tools.survey measure --script model.py --points pts.json --image-w W --image-h H
-    --fix KEY [--fix KEY] [--keys A,B] [--write edited.py]``. Prints the result without the edited script."""
-    pts = json.loads(Path(args.points).read_text(encoding="utf-8"))
+    """CLI: ``python -m tools.survey measure --workdir DIR --script output.py --points pts.json --image-w W
+    --image-h H --fix KEY [--fix KEY] [--keys A,B] [--write edited.py]``. Every path is inside the working
+    directory. Prints the result without the edited script."""
+    from .intake import confined
+
+    with open(confined(args.workdir, args.points), encoding="utf-8") as fh:
+        pts = json.load(fh)
+    with open(confined(args.workdir, args.script), encoding="utf-8") as fh:
+        source = fh.read()
     root = Path(__file__).resolve().parents[2]
-    res = measure(args.script, pts, args.fix, args.image_w, args.image_h, root,
+    res = measure(source, pts, args.fix, args.image_w, args.image_h, root,
                   args.keys.split(",") if args.keys else None)
     if args.write:
-        Path(args.write).write_text(res["edited"], encoding="utf-8")
+        with open(confined(args.workdir, args.write), "w", encoding="utf-8") as fh:
+            fh.write(res["edited"])
     res.pop("edited")
     print(json.dumps(res))
     return 0

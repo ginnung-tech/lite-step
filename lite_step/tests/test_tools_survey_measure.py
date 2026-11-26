@@ -65,24 +65,24 @@ FEATURES = [
 
 def test_the_scripts_numbers_are_its_dimensions_and_edits_touch_only_them():
     dims = {d.key: d for d in read_dimensions(SCRIPT + "POST_X = (-3000, 0, 3000)\n")}
-    assert dims["SPAN"].value == 3000 and dims["POST"].value == 150  # param() counts by its value
-    assert dims["POST_X[0]"].value == -3000 and dims["POST_X[2]"].value == 3000
+    assert dims["SPAN"].value == 3000
+    assert dims["POST"].value == 150  # param() counts by its value
+    assert dims["POST_X[0]"].value == -3000
+    assert dims["POST_X[2]"].value == 3000
     edited = with_dimensions(SCRIPT, read_dimensions(SCRIPT), {"SPAN": 4100.4, "POST": 290})
-    assert "SPAN = 4100\n" in edited and 'POST = param(290, "mm", "Post section")' in edited
+    assert "SPAN = 4100\n" in edited
+    assert 'POST = param(290, "mm", "Post section")' in edited
     assert edited.replace("4100", "3000").replace("param(290", "param(150") == SCRIPT
 
 
-def test_one_picture_of_the_true_frame_measures_the_guessed_script(tmp_path):
+def test_one_picture_of_the_true_frame_measures_the_guessed_script():
     # the truth: a 4.2 m span and 290 mm posts, seen by a camera standing off one corner
     truth = with_dimensions(SCRIPT, read_dimensions(SCRIPT), {"SPAN": 4200, "POST": 290})
     boxes = corners(compile_script(truth, ROOT), {"post_a", "post_b", "beam"})
     world = np.array([feature_point(boxes, f) for f in FEATURES])
     cam = PerspectiveCamera.look_at((-2.5, -6.0, 1.7), (2.0, 0.0, 1.6), 55.0, 1200, 900)
     px = cam.project(world)
-    script = tmp_path / "model.py"
-    script.write_text(SCRIPT, encoding="utf-8")
-
-    res = measure(script, [{"px": p.tolist(), "feature": f} for p, f in zip(px, FEATURES)], ["HEIGHT"],
+    res = measure(SCRIPT, [{"px": p.tolist(), "feature": f} for p, f in zip(px, FEATURES)], ["HEIGHT"],
                   1200, 900, ROOT, keys=["SPAN", "POST", "BEAM_H", "COLOUR_CODE"])
     got = {r["key"]: r for r in res["dimensions"]}
     assert abs(got["SPAN"]["now"] - 4200) <= 30, got["SPAN"]
@@ -90,16 +90,18 @@ def test_one_picture_of_the_true_frame_measures_the_guessed_script(tmp_path):
     assert abs(got["BEAM_H"]["now"] - 300) <= 10  # true value, seen through the beam's top corners
     assert got["COLOUR_CODE"] == {"key": "COLOUR_CODE", "was": 7.0, "now": 7.0, "sigma": 0.0, "seen": False,
                                   "fixed": False}  # nothing depends on it: kept, and said so
-    assert got["HEIGHT"]["fixed"] and got["HEIGHT"]["now"] == 2700
+    assert got["HEIGHT"]["fixed"]
+    assert got["HEIGHT"]["now"] == 2700
     assert res["rmsPx"] < 1.0
     edited = {d.key: d.value for d in read_dimensions(res["edited"])}
-    assert edited["SPAN"] == got["SPAN"]["now"] and edited["POST"] == got["POST"]["now"]
-    assert edited["COLOUR_CODE"] == 7 and edited["HEIGHT"] == 2700
+    assert edited["SPAN"] == got["SPAN"]["now"]
+    assert edited["POST"] == got["POST"]["now"]
+    assert edited["COLOUR_CODE"] == 7
+    assert edited["HEIGHT"] == 2700
 
 
-def test_it_refuses_what_cannot_give_a_measurement(tmp_path):
-    script = tmp_path / "model.py"
-    script.write_text(SCRIPT, encoding="utf-8")
+def test_it_refuses_what_cannot_give_a_measurement():
+    script = SCRIPT
     pts = [{"px": [100.0 + i, 200.0 + 3 * i], "feature": f} for i, f in enumerate(FEATURES)]
     with pytest.raises(MeasureError, match="not a dimension"):
         measure(script, pts, ["NO_SUCH"], 1200, 900, ROOT)

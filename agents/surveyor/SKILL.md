@@ -70,7 +70,7 @@ they know it was understood.
 5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
    sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport
    built from one photo, 2026-11-26: 150 mm posts on a 3 m grid against ~300 mm posts in the picture).
-   `python -m tools.survey measure --script output.py --points survey/scripts/<id>-points.json
+   `python -m tools.survey measure --workdir . --script output.py --points survey/scripts/<id>-points.json
    --image-w W --image-h H --fix KEY [--fix KEY]` fits the camera **and** the script's dimensions
    (its UPPER_CASE module-level numbers and `param()`s) together. A point names an element's box corner,
    `ELEMENT:xmin|xmax,ymin|ymax,zmin|zmax`, with the element named as in the script. Hold one length for
