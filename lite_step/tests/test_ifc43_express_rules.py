@@ -38,7 +38,8 @@ _EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 #: validate: mesh- and brep-heavy models whose emitters the remaining examples
 #: also reach. Kept out so the gate stays cheap enough to run on every change.
 _SLOW = {"05_log_cabin.py", "10_mary_elizabeth_hospital.py",
-         "12_stellarator.py", "13_stellarator.py", "14_stellarator.py"}
+         "12_stellarator.py", "13_stellarator.py", "14_stellarator.py",
+         "16_eiffel_tower.py"}
 
 
 def _open(ifc_text: str):
