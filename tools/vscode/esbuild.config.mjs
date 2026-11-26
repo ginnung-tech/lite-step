@@ -67,12 +67,5 @@ if (isWatch) {
   await esbuild.build(extensionConfig);
   await esbuild.build(webviewConfig);
   await esbuild.build(credentialHelperConfig);
-  if (process.platform !== "win32") {
-    try {
-      fs.chmodSync(path.resolve("out", "git-credential-ginnung.js"), 0o755);
-    } catch {
-      // ignore chmod failures
-    }
-  }
   console.log("[esbuild] build complete.");
 }

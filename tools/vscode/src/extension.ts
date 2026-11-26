@@ -9,7 +9,6 @@
  */
 
 import * as vscode from "vscode";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -122,7 +121,7 @@ export function activate(context: vscode.ExtensionContext) {
   sidebarProvider = new LiteStepSidebarProvider(server, async () => {
     const token = await context.secrets.get(GIT_TOKEN_SECRET_KEY);
     const link = await getWorkspaceGitLink();
-    return { signedIn: Boolean(token && token.trim()), link };
+    return { signedIn: Boolean(token?.trim()), link };
   });
   codeLensProvider = new LiteStepCodeLensProvider();
   const hoverProvider = new LiteStepHoverProvider();
@@ -580,14 +579,21 @@ function resolveHelperCommand(context: vscode.ExtensionContext): string {
   if (configuredNode) {
     return formatCredentialHelperCommand(configuredNode, helperScriptPath);
   }
-  try {
-    execFileSync("node", ["--version"], { stdio: "ignore", windowsHide: true });
-    return formatCredentialHelperCommand("node", helperScriptPath);
-  } catch {
-    return formatCredentialHelperCommand(process.execPath, helperScriptPath, {
-      ELECTRON_RUN_AS_NODE: "1",
-    });
+  const fixedNodePaths =
+    process.platform === "win32"
+      ? [
+          path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"),
+          path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "nodejs", "node.exe"),
+        ]
+      : ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
+  for (const candidate of fixedNodePaths) {
+    if (fs.existsSync(candidate)) {
+      return formatCredentialHelperCommand(candidate, helperScriptPath);
+    }
   }
+  return formatCredentialHelperCommand(process.execPath, helperScriptPath, {
+    ELECTRON_RUN_AS_NODE: "1",
+  });
 }
 
 async function ensureClientToken(context: vscode.ExtensionContext): Promise<string | undefined> {

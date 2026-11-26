@@ -15,8 +15,8 @@ const execFileAsync = promisify(execFile);
 export const DEFAULT_REMOTE_NAME = "ginnung";
 export const DEFAULT_API_BASE_URL = "https://api.ginnung.tech";
 export const CANONICAL_PROJECT_RE =
-  /^(?:default|P(?:000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|[1-9][0-9]{3,5}))$/;
-export const REMOTE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  /^(?:default|P(?:000[1-9]|00[1-9]\d|0[1-9]\d{2}|[1-9]\d{3,5}))$/;
+export const REMOTE_NAME_RE = /^[A-Za-z\d][A-Za-z\d._-]{0,63}$/;
 
 const CONTROL_CHARS_RE = /[\r\n\0]/;
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
@@ -61,6 +61,14 @@ export function stripTokenQuery(token: string): string {
   return secret;
 }
 
+function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return s.slice(0, end);
+}
+
 export function validateApiBaseUrl(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed || CONTROL_CHARS_RE.test(trimmed)) {
@@ -81,7 +89,7 @@ export function validateApiBaseUrl(raw: string): string {
       `API base URL must use https:// (or http:// on loopback only), got ${parsed.origin}`
     );
   }
-  const cleanPath = parsed.pathname.replace(/\/+$/, "");
+  const cleanPath = trimTrailingSlashes(parsed.pathname);
   return cleanPath && cleanPath !== "/" ? `${parsed.origin}${cleanPath}` : parsed.origin;
 }
 
@@ -127,7 +135,7 @@ export function validateRemoteName(raw: string): string {
 }
 
 function shQuote(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
+  return "'" + value.replaceAll("'", String.raw`'\''`) + "'";
 }
 
 /**
@@ -168,6 +176,37 @@ export function formatCredentialHelperCommand(
   return `!${cmdParts.join(" ")}`;
 }
 
+function formatMintError(status: number, code: string | undefined, msg: string): Error {
+  const suffix = msg ? `: ${msg}` : "";
+  if (status === 401) {
+    return new Error(`Ginnung Git authorization failed (401): client token expired or revoked${suffix}`);
+  }
+  if (status === 403) {
+    if (code === "pack_entitlement_required") {
+      return new Error(
+        "Ginnung Git authorization denied (403): your plan does not include the proprietary service pack"
+      );
+    }
+    return new Error(`Ginnung Git authorization forbidden (403)${suffix}`);
+  }
+  if (status === 404) {
+    return new Error(`Ginnung project not found (404)${suffix}`);
+  }
+  if (status === 503) {
+    return new Error(`Ginnung Git token service temporarily unavailable (503)${suffix}`);
+  }
+  return new Error(`POST /git/tokens failed (HTTP ${status})${suffix}`);
+}
+
+function parseJsonObjectSafe(rawText: string): Record<string, unknown> {
+  if (!rawText.trim()) return {};
+  try {
+    return JSON.parse(rawText) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Mint a short-lived single-repo Cloudflare Artifacts token from Ginnung's
  * edge broker (`POST /git/tokens`).
@@ -194,44 +233,11 @@ export async function mintGitToken(
   });
 
   const text = await res.text();
-  let parsed: Record<string, unknown> = {};
-  try {
-    if (text.trim()) {
-      parsed = JSON.parse(text) as Record<string, unknown>;
-    }
-  } catch {
-    // Non-JSON upstream error
-  }
-
+  const parsed = parseJsonObjectSafe(text);
   if (!res.ok) {
     const code = typeof parsed.code === "string" ? parsed.code : undefined;
     const msg = typeof parsed.message === "string" ? parsed.message : text.trim();
-    if (res.status === 401) {
-      throw new Error(
-        `Ginnung Git authorization failed (401): client token expired or revoked${msg ? ` — ${msg}` : ""}`
-      );
-    }
-    if (res.status === 403) {
-      if (code === "pack_entitlement_required") {
-        throw new Error(
-          "Ginnung Git authorization denied (403): your plan does not include the proprietary service pack"
-        );
-      }
-      throw new Error(
-        `Ginnung Git authorization forbidden (403)${msg ? `: ${msg}` : ""}`
-      );
-    }
-    if (res.status === 404) {
-      throw new Error(`Ginnung project not found (404)${msg ? `: ${msg}` : ""}`);
-    }
-    if (res.status === 503) {
-      throw new Error(
-        `Ginnung Git token service temporarily unavailable (503)${msg ? `: ${msg}` : ""}`
-      );
-    }
-    throw new Error(
-      `POST /git/tokens failed (HTTP ${res.status})${msg ? `: ${msg}` : ""}`
-    );
+    throw formatMintError(res.status, code, msg);
   }
 
   const remote = typeof parsed.remote === "string" ? validateRemoteUrl(parsed.remote) : "";
@@ -376,6 +382,14 @@ export async function readGinnungRemoteLink(repoRoot: string): Promise<GinnungRe
   };
 }
 
+async function unsetLocalConfig(repoRoot: string, key: string): Promise<void> {
+  try {
+    await runGit(["config", "--local", "--unset-all", key], repoRoot);
+  } catch {
+    // Ignore if not set
+  }
+}
+
 export async function unlinkGinnungRemote(
   repoRoot: string,
   opts: { removeRemote?: boolean } = {}
@@ -385,16 +399,10 @@ export async function unlinkGinnungRemote(
   if (!resolved) return;
 
   if (link?.remoteUrl) {
-    for (const key of [
-      `credential.${link.remoteUrl}.helper`,
-      `credential.${link.remoteUrl}.useHttpPath`,
-    ]) {
-      try {
-        await runGit(["config", "--local", "--unset-all", key], resolved);
-      } catch {
-        // Ignore if not set
-      }
-    }
+    await Promise.all([
+      unsetLocalConfig(resolved, `credential.${link.remoteUrl}.helper`),
+      unsetLocalConfig(resolved, `credential.${link.remoteUrl}.useHttpPath`),
+    ]);
   }
 
   try {

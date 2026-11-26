@@ -46,7 +46,7 @@ export interface CredentialQuery {
 
 export function getGinnungConfigDir(overrideDir?: string): string {
   const candidate = overrideDir || process.env.GINNUNG_CONFIG_DIR;
-  if (candidate && candidate.trim()) {
+  if (candidate?.trim()) {
     return path.resolve(candidate.trim());
   }
   return path.join(os.homedir(), ".ginnung");
@@ -175,6 +175,52 @@ export class GitCredentialBroker {
     }
   }
 
+  private async _readRequestBody(req: http.IncomingMessage): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; status: number; code: string; message: string }> {
+    let raw = "";
+    try {
+      for await (const chunk of req) {
+        raw += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf-8");
+        if (raw.length > 32 * 1024) {
+          return { ok: false, status: 413, code: "payload_too_large", message: "Request body too large" };
+        }
+      }
+    } catch {
+      return { ok: false, status: 400, code: "bad_request", message: "Failed reading body" };
+    }
+    try {
+      const body = (raw.trim() ? JSON.parse(raw) : {}) as Record<string, unknown>;
+      return { ok: true, body };
+    } catch {
+      return { ok: false, status: 400, code: "bad_request", message: "Invalid JSON body" };
+    }
+  }
+
+  private _parseTokenRequest(body: Record<string, unknown>): GitTokenRequest {
+    const scope: "read" | "write" = body.scope === "read" ? "read" : "write";
+    if (body.target === "service") {
+      if (body.repo === "pack") {
+        return { target: "service", repo: "pack", scope: "read" };
+      }
+      if (body.repo === "core") {
+        return { target: "service", repo: "core", scope: "read" };
+      }
+      throw new Error("Invalid service repo");
+    }
+    const pidRaw = typeof body.projectId === "string" ? body.projectId : "";
+    return { target: "project", projectId: validateProjectId(pidRaw), scope };
+  }
+
+  private _getCachedToken(cacheKey: string): GitTokenResponse | null {
+    const cached = this._cache.get(cacheKey);
+    if (!cached) return null;
+    const expMs = Date.parse(cached.expiresAt);
+    if (Number.isFinite(expMs) && expMs - Date.now() > 60_000) {
+      return cached;
+    }
+    this._cache.delete(cacheKey);
+    return null;
+  }
+
   private async _handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -200,52 +246,17 @@ export class GitCredentialBroker {
       return;
     }
 
-    let raw = "";
-    try {
-      for await (const chunk of req) {
-        raw += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf-8");
-        if (raw.length > 32 * 1024) {
-          send(413, { code: "payload_too_large", message: "Request body too large" });
-          return;
-        }
-      }
-    } catch {
-      send(400, { code: "bad_request", message: "Failed reading body" });
+    const parsedBody = await this._readRequestBody(req);
+    if (!parsedBody.ok) {
+      send(parsedBody.status, { code: parsedBody.code, message: parsedBody.message });
       return;
     }
 
-    let body: Record<string, unknown>;
-    try {
-      body = (raw.trim() ? JSON.parse(raw) : {}) as Record<string, unknown>;
-    } catch {
-      send(400, { code: "bad_request", message: "Invalid JSON body" });
-      return;
-    }
-
-    const scope: "read" | "write" = body.scope === "read" ? "read" : "write";
-    const forceRefresh = body.forceRefresh === true;
-
+    const body = parsedBody.body;
     let tokenReq: GitTokenRequest;
-    try {
-      if (body.target === "service") {
-        const repo = body.repo === "pack" ? "pack" : body.repo === "core" ? "core" : null;
-        if (!repo) {
-          send(400, { code: "bad_request", message: "Invalid service repo" });
-          return;
-        }
-        tokenReq = { target: "service", repo, scope: "read" };
-      } else {
-        const pidRaw = typeof body.projectId === "string" ? body.projectId : "";
-        const projectId = validateProjectId(pidRaw);
-        tokenReq = { target: "project", projectId, scope };
-      }
-    } catch (err) {
-      send(400, { code: "bad_request", message: err instanceof Error ? err.message : String(err) });
-      return;
-    }
-
     let apiBaseUrl: string;
     try {
+      tokenReq = this._parseTokenRequest(body);
       const requestedBase =
         typeof body.apiBaseUrl === "string" && body.apiBaseUrl.trim()
           ? body.apiBaseUrl
@@ -257,7 +268,7 @@ export class GitCredentialBroker {
     }
 
     const clientToken = await this._getClientToken();
-    if (!clientToken || !clientToken.trim()) {
+    if (!clientToken?.trim()) {
       send(401, {
         code: "not_signed_in",
         message: "Not signed in to Ginnung Git (run 'Ginnung Git: Set Client Token')",
@@ -268,15 +279,11 @@ export class GitCredentialBroker {
     const repoKey =
       tokenReq.target === "service" ? `service:${tokenReq.repo}` : `project:${tokenReq.projectId}`;
     const cacheKey = `${apiBaseUrl}|${repoKey}|${tokenReq.scope}`;
-    if (!forceRefresh) {
-      const cached = this._cache.get(cacheKey);
+    if (body.forceRefresh !== true) {
+      const cached = this._getCachedToken(cacheKey);
       if (cached) {
-        const expMs = Date.parse(cached.expiresAt);
-        if (Number.isFinite(expMs) && expMs - Date.now() > 60_000) {
-          send(200, cached as unknown as Record<string, unknown>);
-          return;
-        }
-        this._cache.delete(cacheKey);
+        send(200, cached as unknown as Record<string, unknown>);
+        return;
       }
     }
 
@@ -315,10 +322,10 @@ export function parseCredentialInput(stdinText: string): CredentialQuery {
  * (`/git/<ns>/<userId>.<projectId>.git` or `/git/<ns>/service-(core|pack).git`).
  */
 export function parseArtifactsPath(rawPath: string): GitTokenRequest | null {
-  const cleaned = rawPath.replace(/^\/+/, "");
+  const cleaned = trimSlashes(rawPath);
   const parts = cleaned.split("/");
   if (parts.length < 3 || parts[0] !== "git") return null;
-  let repoName = parts[parts.length - 1] || "";
+  let repoName = parts.at(-1) ?? "";
   if (repoName.endsWith(".git")) {
     repoName = repoName.slice(0, -4);
   }
@@ -335,8 +342,16 @@ export function parseArtifactsPath(rawPath: string): GitTokenRequest | null {
   return { target: "project", projectId, scope: "write" };
 }
 
+function trimSlashes(p: string): string {
+  let start = 0;
+  let end = p.length;
+  while (start < end && p.charCodeAt(start) === 47) start += 1;
+  while (end > start && p.charCodeAt(end - 1) === 47) end -= 1;
+  return p.slice(start, end);
+}
+
 function normalizeUrlPath(p: string): string {
-  return p.replace(/^\/+/, "").replace(/\/+$/, "");
+  return trimSlashes(p);
 }
 
 function matchesRemoteUrl(query: CredentialQuery, remoteUrlStr: string): boolean {
@@ -422,6 +437,84 @@ function readStandaloneClientAuth(
   return null;
 }
 
+async function resolveTargetRequest(
+  query: CredentialQuery,
+  cwd: string
+): Promise<{ req: GitTokenRequest; apiBaseUrl: string; linked: boolean }> {
+  const link = await readGinnungRemoteLink(cwd);
+  if (link) {
+    if (!matchesRemoteUrl(query, link.remoteUrl)) {
+      throw new Error(
+        `Refusing Ginnung credentials for unmatched remote (${query.protocol || ""}://${query.host || ""}/${query.path || ""})`
+      );
+    }
+    return {
+      req: { target: "project", projectId: link.projectId, scope: link.scope },
+      apiBaseUrl: link.apiBaseUrl,
+      linked: true,
+    };
+  }
+
+  if (!query.host || !isAllowedArtifactsHost(query.host)) {
+    throw new Error(`Refusing Ginnung credentials for non-Artifacts host '${query.host || ""}'`);
+  }
+  const parsed = query.path ? parseArtifactsPath(query.path) : null;
+  if (!parsed) {
+    throw new Error(`Cannot resolve Ginnung repository from credential path '${query.path || ""}'`);
+  }
+  return { req: parsed, apiBaseUrl: DEFAULT_API_BASE_URL, linked: false };
+}
+
+async function readBrokerErrorMessage(res: Response): Promise<string> {
+  try {
+    const errJson = (await res.json()) as { message?: string };
+    if (errJson.message) return errJson.message;
+  } catch {
+    // Ignore non-JSON error
+  }
+  return `Broker HTTP ${res.status}`;
+}
+
+async function tryBrokerToken(
+  broker: BrokerFile,
+  req: GitTokenRequest,
+  apiBaseUrl: string,
+  hasStandaloneFallback: boolean,
+  fetchImpl: typeof fetch
+): Promise<{ username: string; password: string } | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${broker.port}/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Broker-Secret": broker.secret,
+      },
+      body: JSON.stringify({ ...req, apiBaseUrl }),
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      const data = (await res.json()) as Partial<GitTokenResponse>;
+      if (typeof data.token === "string" && data.token) {
+        return { username: "x", password: stripTokenQuery(data.token) };
+      }
+      return null;
+    }
+    if (!hasStandaloneFallback) {
+      throw new Error(await readBrokerErrorMessage(res));
+    }
+    return null;
+  } catch (err) {
+    if (!hasStandaloneFallback && err instanceof Error && !/fetch failed|ECONNREFUSED|abort/i.test(err.message)) {
+      throw err;
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Resolve short-lived Basic credentials (`username = x`, `password = <secret>`)
  * for Git `credential get`, checking the repo's remote identity strictly first.
@@ -435,88 +528,19 @@ export async function resolveCredentialForRequest(opts: {
 }): Promise<{ username: string; password: string }> {
   const fetchImpl = opts.fetchImpl ?? fetch;
   const env = opts.env ?? process.env;
-  const link = await readGinnungRemoteLink(opts.cwd);
-
-  let req: GitTokenRequest;
-  let apiBaseUrl: string;
-
-  if (link) {
-    // Host-safety guard: never leak tokens to any other host/path (e.g. github.com).
-    if (!matchesRemoteUrl(opts.query, link.remoteUrl)) {
-      throw new Error(
-        `Refusing Ginnung credentials for unmatched remote (${opts.query.protocol || ""}://${opts.query.host || ""}/${opts.query.path || ""})`
-      );
-    }
-    req = { target: "project", projectId: link.projectId, scope: link.scope };
-    apiBaseUrl = link.apiBaseUrl;
-  } else {
-    if (!opts.query.host || !isAllowedArtifactsHost(opts.query.host)) {
-      throw new Error(
-        `Refusing Ginnung credentials for non-Artifacts host '${opts.query.host || ""}'`
-      );
-    }
-    const parsed = opts.query.path ? parseArtifactsPath(opts.query.path) : null;
-    if (!parsed) {
-      throw new Error(
-        `Cannot resolve Ginnung repository from credential path '${opts.query.path || ""}'`
-      );
-    }
-    req = parsed;
-    apiBaseUrl = DEFAULT_API_BASE_URL;
-  }
+  const { req, apiBaseUrl, linked } = await resolveTargetRequest(opts.query, opts.cwd);
+  const standalone = readStandaloneClientAuth(opts.configDir, env);
 
   // Tier 1: Query running VS Code / Antigravity loopback broker if available.
   const broker = readBrokerFile(opts.configDir);
   if (broker) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
-    try {
-      const res = await fetchImpl(`http://127.0.0.1:${broker.port}/token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Broker-Secret": broker.secret,
-        },
-        body: JSON.stringify({ ...req, apiBaseUrl }),
-        signal: controller.signal,
-      });
-      if (res.ok) {
-        const data = (await res.json()) as Partial<GitTokenResponse>;
-        if (typeof data.token === "string" && data.token) {
-          return { username: "x", password: stripTokenQuery(data.token) };
-        }
-      } else {
-        let errMsg = `Broker HTTP ${res.status}`;
-        try {
-          const errJson = (await res.json()) as { message?: string };
-          if (errJson.message) errMsg = errJson.message;
-        } catch {
-          // Ignore non-JSON error
-        }
-        // Only fall through to standalone token if broker has no token signed in;
-        // surface hard authz/mint failures clearly unless standalone token is set.
-        const standalone = readStandaloneClientAuth(opts.configDir, env);
-        if (!standalone) {
-          throw new Error(errMsg);
-        }
-      }
-    } catch (err) {
-      // Connection refused / IDE closed -> fall back to standalone client token if present.
-      const standalone = readStandaloneClientAuth(opts.configDir, env);
-      if (!standalone) {
-        if (err instanceof Error && !/fetch failed|ECONNREFUSED|abort/i.test(err.message)) {
-          throw err;
-        }
-      }
-    } finally {
-      clearTimeout(timer);
-    }
+    const brokerCreds = await tryBrokerToken(broker, req, apiBaseUrl, Boolean(standalone), fetchImpl);
+    if (brokerCreds) return brokerCreds;
   }
 
   // Tier 2: Standalone token fallback (terminal agents when IDE is closed).
-  const standalone = readStandaloneClientAuth(opts.configDir, env);
   if (standalone) {
-    const effectiveBase = link ? apiBaseUrl : standalone.apiBaseUrl || apiBaseUrl;
+    const effectiveBase = linked ? apiBaseUrl : standalone.apiBaseUrl || apiBaseUrl;
     const minted = await mintGitToken(effectiveBase, standalone.token, req, fetchImpl);
     return { username: "x", password: stripTokenQuery(minted.token) };
   }
