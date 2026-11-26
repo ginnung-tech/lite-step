@@ -9,6 +9,7 @@
  */
 
 import * as vscode from "vscode";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -18,12 +19,34 @@ import { compileLiteStep, readIfcFile, findLiteStepRepo } from "./compiler";
 import { isLiteStepFile, clearCache } from "./detection";
 import { PreviewPanel } from "./preview-panel";
 import { pushIfcToBlender } from "./blender-client";
+import { GitCredentialBroker } from "./git-credential-broker";
+import {
+  DEFAULT_API_BASE_URL,
+  DEFAULT_REMOTE_NAME,
+  type GinnungRemoteLink,
+  cloneGinnungProject,
+  configureGinnungRemote,
+  ensureGitRepo,
+  findGitRepoRoot,
+  formatCredentialHelperCommand,
+  gitPullFromRemote,
+  gitPushToRemote,
+  mintGitToken,
+  readGinnungRemoteLink,
+  unlinkGinnungRemote,
+  validateApiBaseUrl,
+  validateProjectId,
+  validateRemoteName,
+} from "./git-remote";
 import { LiteStepCodeLensProvider } from "./providers/codelens";
 import { LiteStepHoverProvider } from "./providers/hover";
 import { LiteStepDecorationProvider } from "./providers/decoration";
 import { LiteStepSidebarProvider } from "./providers/sidebar-tree";
 
+const GIT_TOKEN_SECRET_KEY = "litestep.ginnungClientToken";
+
 let server: LiteStepServer;
+let gitBroker: GitCredentialBroker | undefined;
 let statusBarItem: vscode.StatusBarItem;
 let codeLensProvider: LiteStepCodeLensProvider;
 let decorationProvider: LiteStepDecorationProvider;
@@ -85,9 +108,22 @@ export function activate(context: vscode.ExtensionContext) {
     server.start(port);
   }
 
+  // Loopback credential broker for repo-local `git pull/push ginnung`
+  gitBroker = new GitCredentialBroker({
+    getClientToken: async () => context.secrets.get(GIT_TOKEN_SECRET_KEY),
+    getApiBaseUrl: () => getConfiguredApiBaseUrl(),
+  });
+  void gitBroker.start().catch((err) => {
+    console.warn(`[Lite-STEP] Failed to start Ginnung Git credential broker: ${err}`);
+  });
+
   // ── Providers ──────────────────────────────────────────
 
-  sidebarProvider = new LiteStepSidebarProvider(server);
+  sidebarProvider = new LiteStepSidebarProvider(server, async () => {
+    const token = await context.secrets.get(GIT_TOKEN_SECRET_KEY);
+    const link = await getWorkspaceGitLink();
+    return { signedIn: Boolean(token && token.trim()), link };
+  });
   codeLensProvider = new LiteStepCodeLensProvider();
   const hoverProvider = new LiteStepHoverProvider();
   decorationProvider = new LiteStepDecorationProvider();
@@ -97,6 +133,11 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     statusBarItem,
     sidebarProvider,
+    {
+      dispose: () => {
+        void gitBroker?.stop();
+      },
+    },
     vscode.commands.registerCommand("litestep.startServer", () => {
       if (server.isRunning) {
         vscode.window.showInformationMessage(
@@ -206,6 +247,41 @@ export function activate(context: vscode.ExtensionContext) {
       sidebarProvider.refresh();
       await sidebarProvider.probeBlender();
     }),
+    vscode.commands.registerCommand("litestep.gitSignIn", async () => {
+      const entered = await vscode.window.showInputBox({
+        title: "Ginnung Git: Set Client Token",
+        prompt: "Paste your Ginnung client token (with git:read / git:write scope)",
+        password: true,
+        ignoreFocusOut: true,
+        validateInput: (val) => (val.trim().length > 0 ? null : "Token cannot be empty"),
+      });
+      if (entered === undefined) return;
+      await context.secrets.store(GIT_TOKEN_SECRET_KEY, entered.trim());
+      gitBroker?.clearCache();
+      sidebarProvider.refresh();
+      vscode.window.showInformationMessage("Ginnung Git: client token saved to IDE SecretStorage.");
+    }),
+    vscode.commands.registerCommand("litestep.gitSignOut", async () => {
+      await context.secrets.delete(GIT_TOKEN_SECRET_KEY);
+      gitBroker?.clearCache();
+      sidebarProvider.refresh();
+      vscode.window.showInformationMessage("Ginnung Git: client token cleared.");
+    }),
+    vscode.commands.registerCommand("litestep.gitLinkRemote", async () => {
+      await linkWorkspaceToGinnung(context);
+    }),
+    vscode.commands.registerCommand("litestep.gitCloneProject", async () => {
+      await cloneProjectFromGinnung(context);
+    }),
+    vscode.commands.registerCommand("litestep.gitPull", async () => {
+      await syncWorkspaceWithGinnung("pull");
+    }),
+    vscode.commands.registerCommand("litestep.gitPush", async () => {
+      await syncWorkspaceWithGinnung("push");
+    }),
+    vscode.commands.registerCommand("litestep.gitUnlinkRemote", async () => {
+      await unlinkWorkspaceFromGinnung();
+    }),
     vscode.window.registerTreeDataProvider("litestep.statusView", sidebarProvider),
     vscode.languages.registerCodeLensProvider(
       [
@@ -231,6 +307,10 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   if (server) {
     server.dispose();
+  }
+  if (gitBroker) {
+    void gitBroker.stop();
+    gitBroker = undefined;
   }
   console.log("[Lite-STEP] Extension deactivated");
 }
@@ -472,4 +552,279 @@ async function pushFileToBlender(filePath: string): Promise<void> {
       }
     );
   }
+}
+
+// ── Ginnung Git remote helpers ─────────────────────────────
+
+function getConfiguredApiBaseUrl(): string {
+  const raw = vscode.workspace.getConfiguration("litestep").get<string>("apiBaseUrl", DEFAULT_API_BASE_URL);
+  try {
+    return validateApiBaseUrl(raw || DEFAULT_API_BASE_URL);
+  } catch {
+    return DEFAULT_API_BASE_URL;
+  }
+}
+
+function getConfiguredRemoteName(): string {
+  const raw = vscode.workspace.getConfiguration("litestep").get<string>("gitRemoteName", DEFAULT_REMOTE_NAME);
+  try {
+    return validateRemoteName(raw || DEFAULT_REMOTE_NAME);
+  } catch {
+    return DEFAULT_REMOTE_NAME;
+  }
+}
+
+function resolveHelperCommand(context: vscode.ExtensionContext): string {
+  const helperScriptPath = context.asAbsolutePath(path.join("out", "git-credential-ginnung.js"));
+  const configuredNode = vscode.workspace.getConfiguration("litestep").get<string>("nodePath", "").trim();
+  if (configuredNode) {
+    return formatCredentialHelperCommand(configuredNode, helperScriptPath);
+  }
+  try {
+    execFileSync("node", ["--version"], { stdio: "ignore", windowsHide: true });
+    return formatCredentialHelperCommand("node", helperScriptPath);
+  } catch {
+    return formatCredentialHelperCommand(process.execPath, helperScriptPath, {
+      ELECTRON_RUN_AS_NODE: "1",
+    });
+  }
+}
+
+async function ensureClientToken(context: vscode.ExtensionContext): Promise<string | undefined> {
+  const existing = (await context.secrets.get(GIT_TOKEN_SECRET_KEY))?.trim();
+  if (existing) return existing;
+
+  const entered = await vscode.window.showInputBox({
+    title: "Ginnung Git Sign-In",
+    prompt: "Paste your Ginnung client token (with git:read / git:write scope) to link or clone projects",
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: (val) => (val.trim().length > 0 ? null : "Token cannot be empty"),
+  });
+  if (entered === undefined) return undefined;
+  const cleaned = entered.trim();
+  await context.secrets.store(GIT_TOKEN_SECRET_KEY, cleaned);
+  gitBroker?.clearCache();
+  sidebarProvider.refresh();
+  return cleaned;
+}
+
+async function getWorkspaceGitLink(): Promise<GinnungRemoteLink | null> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return null;
+  return readGinnungRemoteLink(folders[0].uri.fsPath);
+}
+
+async function promptProjectId(initialValue = "P0001"): Promise<string | undefined> {
+  const entered = await vscode.window.showInputBox({
+    title: "Ginnung Project ID",
+    prompt: "Enter canonical project ID (e.g. P0001, P0002, or default)",
+    value: initialValue,
+    ignoreFocusOut: true,
+    validateInput: (val) => {
+      try {
+        validateProjectId(val);
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message : "Invalid project ID";
+      }
+    },
+  });
+  return entered === undefined ? undefined : validateProjectId(entered);
+}
+
+async function linkWorkspaceToGinnung(context: vscode.ExtensionContext): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    vscode.window.showWarningMessage("Open a workspace folder first before linking a Ginnung Git remote.");
+    return;
+  }
+  const clientToken = await ensureClientToken(context);
+  if (!clientToken) return;
+
+  const existingLink = await getWorkspaceGitLink();
+  const projectId = await promptProjectId(existingLink?.projectId || "P0001");
+  if (!projectId) return;
+
+  const remoteName = await vscode.window.showInputBox({
+    title: "Git Remote Name",
+    prompt: "Name of the Ginnung Git remote (leaves 'origin' untouched)",
+    value: existingLink?.remoteName || getConfiguredRemoteName(),
+    ignoreFocusOut: true,
+    validateInput: (val) => {
+      try {
+        validateRemoteName(val);
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message : "Invalid remote name";
+      }
+    },
+  });
+  if (remoteName === undefined) return;
+
+  const apiBaseUrl = getConfiguredApiBaseUrl();
+  const helperCommand = resolveHelperCommand(context);
+
+  try {
+    const link = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Linking remote '${remoteName}' to ${projectId}…`,
+        cancellable: false,
+      },
+      async () => {
+        const repoRoot = await ensureGitRepo(folders[0].uri.fsPath);
+        const minted = await mintGitToken(apiBaseUrl, clientToken, {
+          target: "project",
+          projectId,
+          scope: "write",
+        });
+        return configureGinnungRemote({
+          repoRoot,
+          remoteName,
+          remoteUrl: minted.remote,
+          projectId,
+          apiBaseUrl,
+          helperCommand,
+          scope: "write",
+        });
+      }
+    );
+    sidebarProvider.refresh();
+    vscode.window.showInformationMessage(
+      `Ginnung Git: linked remote '${link.remoteName}' (${link.projectId}). Use 'git push ${link.remoteName} main' or 'Pull from Ginnung'.`
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Ginnung Git link failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+async function cloneProjectFromGinnung(context: vscode.ExtensionContext): Promise<void> {
+  const clientToken = await ensureClientToken(context);
+  if (!clientToken) return;
+
+  const projectId = await promptProjectId("P0001");
+  if (!projectId) return;
+
+  const picked = await vscode.window.showOpenDialog({
+    canSelectFolders: true,
+    canSelectFiles: false,
+    canSelectMany: false,
+    openLabel: "Select parent folder for clone",
+  });
+  if (!picked || picked.length === 0) return;
+
+  const targetDir = path.join(picked[0].fsPath, `ginnung-${projectId}`);
+  const remoteName = getConfiguredRemoteName();
+  const apiBaseUrl = getConfiguredApiBaseUrl();
+  const helperCommand = resolveHelperCommand(context);
+
+  try {
+    const link = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Cloning Ginnung ${projectId}…`,
+        cancellable: false,
+      },
+      async () => {
+        const minted = await mintGitToken(apiBaseUrl, clientToken, {
+          target: "project",
+          projectId,
+          scope: "write",
+        });
+        return cloneGinnungProject({
+          targetDir,
+          remoteUrl: minted.remote,
+          token: minted.token,
+          remoteName,
+          projectId,
+          apiBaseUrl,
+          helperCommand,
+          scope: "write",
+        });
+      }
+    );
+    const openNow = await vscode.window.showInformationMessage(
+      `Ginnung Git: cloned ${link.projectId} with remote '${link.remoteName}'. Open folder now?`,
+      "Open Folder",
+      "Stay Here"
+    );
+    if (openNow === "Open Folder") {
+      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(targetDir));
+    }
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Ginnung Git clone failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+async function syncWorkspaceWithGinnung(direction: "pull" | "push"): Promise<void> {
+  const link = await getWorkspaceGitLink();
+  if (!link) {
+    vscode.window.showWarningMessage(
+      "This workspace is not linked to a Ginnung Git remote. Run 'Ginnung Git: Link Remote to Workspace' first."
+    );
+    return;
+  }
+
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title:
+          direction === "pull"
+            ? `Pulling from '${link.remoteName}'…`
+            : `Pushing to '${link.remoteName}'…`,
+        cancellable: false,
+      },
+      async () => {
+        if (direction === "pull") {
+          await gitPullFromRemote(link.repoRoot, link.remoteName);
+        } else {
+          await gitPushToRemote(link.repoRoot, link.remoteName);
+        }
+      }
+    );
+    vscode.window.showInformationMessage(
+      direction === "pull"
+        ? `Ginnung Git: pulled latest from '${link.remoteName}'.`
+        : `Ginnung Git: pushed commits to '${link.remoteName}'.`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (direction === "push" && /non-fast-forward|fetch first|rejected/i.test(msg)) {
+      vscode.window.showErrorMessage(
+        `Ginnung Git push rejected (remote '${link.remoteName}' has newer commits). Pull first, resolve any conflict, then push again.`
+      );
+      return;
+    }
+    vscode.window.showErrorMessage(`Ginnung Git ${direction} failed: ${msg}`);
+  }
+}
+
+async function unlinkWorkspaceFromGinnung(): Promise<void> {
+  const link = await getWorkspaceGitLink();
+  const root = link?.repoRoot ?? (await findGitRepoRoot(getWorkspaceRoot()));
+  if (!link || !root) {
+    vscode.window.showInformationMessage("Workspace is not linked to a Ginnung Git remote.");
+    return;
+  }
+
+  const choice = await vscode.window.showQuickPick(
+    [
+      { label: `Remove helper config and remote '${link.remoteName}'`, removeRemote: true },
+      { label: "Remove helper config only (keep Git remote URL)", removeRemote: false },
+    ],
+    { title: "Unlink Ginnung Git Remote" }
+  );
+  if (!choice) return;
+
+  await unlinkGinnungRemote(root, { removeRemote: choice.removeRemote });
+  sidebarProvider.refresh();
+  vscode.window.showInformationMessage(
+    `Ginnung Git: unlinked '${link.remoteName}' (${choice.removeRemote ? "remote removed" : "remote URL kept"}).`
+  );
 }

@@ -39,15 +39,40 @@ const webviewConfig = {
   minify: !isWatch,
 };
 
+/** @type {esbuild.BuildOptions} */
+const credentialHelperConfig = {
+  entryPoints: ["src/git-credential-helper.ts"],
+  bundle: true,
+  outfile: "out/git-credential-ginnung.js",
+  format: "cjs",
+  platform: "node",
+  target: "node20",
+  sourcemap: true,
+  minify: !isWatch,
+  banner: {
+    js: "#!/usr/bin/env node",
+  },
+};
+
 copyVendorAssets();
 if (isWatch) {
   const extCtx = await esbuild.context(extensionConfig);
   const webCtx = await esbuild.context(webviewConfig);
+  const helperCtx = await esbuild.context(credentialHelperConfig);
   await extCtx.watch();
   await webCtx.watch();
+  await helperCtx.watch();
   console.log("[esbuild] watching...");
 } else {
   await esbuild.build(extensionConfig);
   await esbuild.build(webviewConfig);
+  await esbuild.build(credentialHelperConfig);
+  if (process.platform !== "win32") {
+    try {
+      fs.chmodSync(path.resolve("out", "git-credential-ginnung.js"), 0o755);
+    } catch {
+      // ignore chmod failures
+    }
+  }
   console.log("[esbuild] build complete.");
 }

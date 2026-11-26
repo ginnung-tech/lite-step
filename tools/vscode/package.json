@@ -67,6 +67,48 @@
         "title": "Refresh Status",
         "icon": "$(refresh)",
         "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitSignIn",
+        "title": "Ginnung Git: Set Client Token",
+        "icon": "$(key)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitSignOut",
+        "title": "Ginnung Git: Clear Client Token",
+        "icon": "$(sign-out)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitLinkRemote",
+        "title": "Ginnung Git: Link Remote to Workspace",
+        "icon": "$(plug)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitCloneProject",
+        "title": "Ginnung Git: Clone Project",
+        "icon": "$(repo-clone)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitPull",
+        "title": "Ginnung Git: Pull from Ginnung",
+        "icon": "$(repo-pull)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitPush",
+        "title": "Ginnung Git: Push to Ginnung",
+        "icon": "$(repo-push)",
+        "category": "Lite-STEP"
+      },
+      {
+        "command": "litestep.gitUnlinkRemote",
+        "title": "Ginnung Git: Unlink Remote",
+        "icon": "$(debug-disconnect)",
+        "category": "Lite-STEP"
       }
     ],
     "viewsContainers": {
@@ -185,6 +227,21 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically start the WebSocket server on activation"
+        },
+        "litestep.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.ginnung.tech",
+          "description": "Base URL of the Ginnung API used to mint Cloudflare Artifacts Git tokens (for example https://api.ginnung.tech or https://staging-api.grab.technology)"
+        },
+        "litestep.gitRemoteName": {
+          "type": "string",
+          "default": "ginnung",
+          "description": "Named Git remote managed by the Lite-STEP extension (keeps origin untouched)"
+        },
+        "litestep.nodePath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to Node.js binary used by the repo-local Ginnung Git credential helper (auto-detected if empty)"
         }
       }
     }
@@ -196,7 +253,8 @@
     "package": "vsce package --no-dependencies",
     "lint": "tsc --noEmit",
     "build:cli": "esbuild src/bridge-cli.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out-cli/bridge-cli.js --log-level=warning",
-    "test": "npm run build:cli && esbuild test/*.test.ts --bundle --platform=node --format=cjs --outdir=out-test --log-level=warning && node --test --test-force-exit \"out-test/*.js\""
+    "build:helper": "esbuild src/git-credential-helper.ts --bundle --platform=node --format=cjs --target=node20 --banner:js=\"#!/usr/bin/env node\" --outfile=out/git-credential-ginnung.js --log-level=warning",
+    "test": "npm run build:cli && npm run build:helper && esbuild test/*.test.ts --bundle --platform=node --format=cjs --outdir=out-test --log-level=warning && node --test --test-force-exit \"out-test/*.js\""
   },
   "dependencies": {
     "ws": "^8.16.0"

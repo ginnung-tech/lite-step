@@ -11,17 +11,29 @@
 import * as vscode from "vscode";
 import { LiteStepServer } from "../server";
 import { probeBlenderConnection } from "../blender-client";
+import type { GinnungRemoteLink } from "../git-remote";
 
 export type TreeItemType =
   | "section"
   | "server-status"
   | "web-app-status"
   | "blender-status"
+  | "git-remote-status"
   | "action-push-web"
   | "action-push-blender"
   | "action-preview"
+  | "action-git-link"
+  | "action-git-pull"
+  | "action-git-push"
   | "action-start-server"
   | "action-stop-server";
+
+export interface GitRemoteSidebarStatus {
+  signedIn: boolean;
+  link: GinnungRemoteLink | null;
+}
+
+export type GitStatusProvider = () => Promise<GitRemoteSidebarStatus>;
 
 export class LiteStepTreeItem extends vscode.TreeItem {
   constructor(
@@ -57,10 +69,14 @@ export class LiteStepSidebarProvider
 
   private _blenderOnline: boolean = false;
   private _blenderChecking: boolean = false;
+  private _gitStatus: GitRemoteSidebarStatus = { signedIn: false, link: null };
   private _probeTimer: ReturnType<typeof setInterval> | null = null;
   private _disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly server: LiteStepServer) {
+  constructor(
+    private readonly server: LiteStepServer,
+    private readonly gitStatusProvider?: GitStatusProvider
+  ) {
     // Listen to server status changes
     this._disposables.push(
       server.onDidChangeStatus(() => {
@@ -74,11 +90,25 @@ export class LiteStepSidebarProvider
     }, 8000);
     setTimeout(() => {
       void this.probeBlender().catch(() => {});
+      void this.refreshGitStatus().catch(() => {});
     }, 0);
+  }
+
+  public async refreshGitStatus(): Promise<void> {
+    if (!this.gitStatusProvider) return;
+    try {
+      this._gitStatus = await this.gitStatusProvider();
+      this._onDidChangeTreeData.fire();
+    } catch {
+      // Ignore git probe errors
+    }
   }
 
   public refresh(): void {
     this._onDidChangeTreeData.fire();
+    if (this.gitStatusProvider) {
+      void this.refreshGitStatus().catch(() => {});
+    }
   }
 
   public async probeBlender(): Promise<void> {
@@ -233,7 +263,48 @@ export class LiteStepSidebarProvider
       );
     }
 
-    // ── 4. Quick Actions ─────────────────────────────────────
+    // ── 4. Ginnung Git Remote Indicator ─────────────────────────
+    if (this._gitStatus.link) {
+      const link = this._gitStatus.link;
+      items.push(
+        new LiteStepTreeItem(
+          `Ginnung Git: ${link.remoteName} → ${link.projectId}`,
+          "git-remote-status",
+          vscode.TreeItemCollapsibleState.None,
+          {
+            description: this._gitStatus.signedIn ? "token set" : "no client token",
+            tooltip: `Remote: ${link.remoteName} (${link.remoteUrl})\nAPI: ${link.apiBaseUrl}\nScope: ${link.scope}`,
+            iconPath: new vscode.ThemeIcon(
+              "git-branch",
+              new vscode.ThemeColor(
+                this._gitStatus.signedIn ? "charts.green" : "testing.iconQueued"
+              )
+            ),
+            contextValue: "gitRemoteLinked",
+          }
+        )
+      );
+    } else {
+      items.push(
+        new LiteStepTreeItem(
+          "Ginnung Git: Not linked",
+          "git-remote-status",
+          vscode.TreeItemCollapsibleState.None,
+          {
+            description: this._gitStatus.signedIn ? "token set — click to link" : "click to link",
+            tooltip: "Link a named 'ginnung' remote to this workspace (preserves origin)",
+            iconPath: new vscode.ThemeIcon("git-branch"),
+            contextValue: "gitRemoteUnlinked",
+            command: {
+              command: "litestep.gitLinkRemote",
+              title: "Link Ginnung Git Remote",
+            },
+          }
+        )
+      );
+    }
+
+    // ── 5. Quick Actions ─────────────────────────────────────
     items.push(
       new LiteStepTreeItem(
         "Push Model to Web App",
@@ -276,7 +347,54 @@ export class LiteStepSidebarProvider
             title: "Preview Model",
           },
         }
-      )
+      ),
+      ...(this._gitStatus.link
+        ? [
+            new LiteStepTreeItem(
+              `Pull from '${this._gitStatus.link.remoteName}'`,
+              "action-git-pull",
+              vscode.TreeItemCollapsibleState.None,
+              {
+                description: this._gitStatus.link.projectId,
+                tooltip: `git pull ${this._gitStatus.link.remoteName} main`,
+                iconPath: new vscode.ThemeIcon("repo-pull"),
+                command: {
+                  command: "litestep.gitPull",
+                  title: "Pull from Ginnung",
+                },
+              }
+            ),
+            new LiteStepTreeItem(
+              `Push to '${this._gitStatus.link.remoteName}'`,
+              "action-git-push",
+              vscode.TreeItemCollapsibleState.None,
+              {
+                description: this._gitStatus.link.projectId,
+                tooltip: `git push ${this._gitStatus.link.remoteName} main`,
+                iconPath: new vscode.ThemeIcon("repo-push"),
+                command: {
+                  command: "litestep.gitPush",
+                  title: "Push to Ginnung",
+                },
+              }
+            ),
+          ]
+        : [
+            new LiteStepTreeItem(
+              "Link Ginnung Git Remote",
+              "action-git-link",
+              vscode.TreeItemCollapsibleState.None,
+              {
+                description: "Keeps origin untouched",
+                tooltip: "Add named 'ginnung' remote and repo-local credential helper",
+                iconPath: new vscode.ThemeIcon("plug"),
+                command: {
+                  command: "litestep.gitLinkRemote",
+                  title: "Link Ginnung Git Remote",
+                },
+              }
+            ),
+          ])
     );
 
     return items;
