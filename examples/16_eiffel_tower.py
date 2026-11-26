@@ -28,7 +28,7 @@ Compile with::
 
 import math
 import numpy as np
-from lite_step import compile_main
+from lite_step import compile_main, param
 from lite_step.models import (Project, Storey, Point, Point2D,
     Wall, Window, Door, Slab, Roof, Column, Beam, Space, Site, Element,
     Box, Extrude, Sweep, Sheet, Pipe, Revolve, Mesh, Bar, Material, LayerSet,
@@ -44,16 +44,17 @@ IRON = "#5E4B3C"  # Eiffel Tower brown
 PANEL_HEIGHTS = [4.13, 11.0, 11.0, 11.0, 11.0, 7.0, 11.0, 11.0, 11.0, 10.20, 10.00, 4.90,
                  11.300, 10.700, 10.600, 10.500, 10.400, 10.000, 10.000, 9.50359, 9.03615,
                  8.59654, 8.13334, 7.63810, 7.20027, 6.88318, 6.51702, 6.16588, 5.83364]
-THIRD_FLOOR_Z = 273.88   # measured on PL. VII (the table's 273.63 is the level of the panel lines)
-THIRD_SIDE = 18.65
-THIRD_GIRDER_BOTTOM = 271.37
-CAMPANILE_BOX_HALF, CAMPANILE_BOX_TOP = 5.85, 280.5
+THIRD_FLOOR_Z = param(273.88, "m", "3rd floor level above the support centres")   # measured on PL. VII (the table's 273.63 is the level of the panel lines)
+THIRD_SIDE = param(18.65, "m", "3rd floor platform side")
+THIRD_GIRDER_BOTTOM = param(271.37, "m", "3rd floor girder bottom level")
+CAMPANILE_BOX_HALF = param(5.85, "m", "Campanile base box half-width")
+CAMPANILE_BOX_TOP = param(280.5, "m", "Campanile base box top level")
 # (z, radius) of the dome, drum and cupola, measured on PL. VII
 CAMPANILE_PROFILE = [(280.5, 5.85), (281.0, 5.66), (281.5, 5.53), (282.0, 5.35), (282.5, 5.19), (283.0, 4.90),
                      (283.5, 4.58), (284.0, 4.16), (284.5, 3.60), (285.0, 2.89), (285.5, 2.75), (287.0, 2.79),
                      (289.0, 2.85), (289.5, 2.36), (290.0, 1.85), (291.0, 1.81), (292.0, 1.80), (293.0, 1.49),
                      (294.0, 1.36), (295.5, 1.33), (296.0, 0.99), (296.5, 0.65)]
-CAMPANILE_POLE_TOP = 304.0
+CAMPANILE_POLE_TOP = param(304.0, "m", "Top of the campanile pole")
 
 # Lower piers, L0..L12: (inner, outer) crossbow axis distance from the tower axis (m),
 # measured in the face elevation: inner = G/2, outer = G/2 + W (pier width W).
@@ -82,8 +83,8 @@ MID_HALF_GAP = {12: 5.34, 13: 4.45, 14: 3.50, 15: 2.20, 16: 1.20, 17: 0.50, 18: 
 # crown 37.45 m; band 3.27 m deep at the crown; the arc beam's bottom chord at 41.06 m.
 ARCH_CROWN_R, ARCH_CROWN_Z = 40.384, -2.934          # crown arc: centre (0, -2.934)
 ARCH_SIDE_R, ARCH_SIDE_U, ARCH_SIDE_Z = 34.125, 2.859, 2.898  # side arcs: centres (+-2.859, 2.898)
-ARCH_FOOT = 36.86
-ARCH_BAND = 3.27
+ARCH_FOOT = param(36.86, "m", "Decorative arch foot, from the tower axis")
+ARCH_BAND = param(3.27, "m", "Decorative arch band depth at the crown")
 # The arch's foot (PL. III, ink silhouette through the frozen fig7 camera, v12): below the side arc's
 # vertical tangent (u = +-36.984, z = 2.898) the intrados drops straight to a collar at z 2.0; the shaft
 # there is 0.58 m wide, axis at u = +-37.30. It stands on a pedestal, not on the pier: collar 0.79 m
@@ -101,14 +102,15 @@ def arch_intrados(u):
         return ARCH_CROWN_Z + math.sqrt(max(0.0, ARCH_CROWN_R ** 2 - u * u)), (0.0, ARCH_CROWN_Z)
     cu = -ARCH_SIDE_U if u < 0 else ARCH_SIDE_U
     return ARCH_SIDE_Z + math.sqrt(max(0.0, ARCH_SIDE_R ** 2 - (u - cu) ** 2)), (cu, ARCH_SIDE_Z)
-ARC_BEAM_BOTTOM = 41.06
-FIRST_FLOOR_HALF = 70.695 / 2
+ARC_BEAM_BOTTOM = param(41.06, "m", "Arc beam bottom chord level")
+FIRST_FLOOR_WIDTH = param(70.695, "m", "1st floor width")
+FIRST_FLOOR_HALF = FIRST_FLOOR_WIDTH / 2
 # Masonry under each pier (PL. I): 25.334 m across at the ground, top at the support centres.
-PLINTH = 25.334
+PLINTH = param(25.334, "m", "Masonry plinth width at the ground")
 
-BOW = 800       # crossbow (arbalétrier) section, lattice box as its envelope (PL. III: ~0.8 m)
-BRACE = 600     # lattice diagonal ("Treillis"), PL. III ~0.6-0.65 m
-BAR = 550       # crossbar ("Corn. 80x80x10" lattice), PL. III ~0.55 m
+BOW = param(800, "mm", "Crossbow section")       # crossbow (arbalétrier) section, lattice box as its envelope (PL. III: ~0.8 m)
+BRACE = param(600, "mm", "Lattice diagonal section")     # lattice diagonal ("Treillis"), PL. III ~0.6-0.65 m
+BAR = param(550, "mm", "Crossbar section")       # crossbar ("Corn. 80x80x10" lattice), PL. III ~0.55 m
 
 
 def levels():
