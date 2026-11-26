@@ -158,3 +158,23 @@ def test_background_mask_and_polyline_draw_where_the_camera_says():
     b, g, r = (int(x) for x in img[50, 45])  # anti-aliased: red dominates on the line
     assert r > 200 and b < 40 and g < 40
     assert tuple(img[70, 45]) == (38, 35, 34)  # and nowhere else
+
+
+def test_with_no_model_a_picture_is_kept_and_nothing_is_asked(tmp_path, capsys):
+    # Staging 2026-11-26: a carport to build from a picture, no model yet, and the person was told to mark four
+    # points on the model. With nothing to line up with, the picture waits for a model; no question is written.
+    # Kept out of test_tools_survey_intake.py on purpose: that module needs open3d, and CI has none.
+    import json
+
+    from tools.survey.__main__ import main
+
+    for shade, kind in ((200, "photo"), (90, "screenshot")):
+        pic = tmp_path / f"carport-{kind}.png"
+        cv2.imwrite(str(pic), np.full((60, 80, 3), shade, np.uint8))  # two pictures: the same one is taken in once
+        assert main(["add", "--workdir", str(tmp_path), "--picture", str(pic), "--kind", kind,
+                     "--title", f"Carport {kind}", "--id", f"carport-{kind}"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["fit"] == "awaiting_model" and out["id"] == f"carport-{kind}"
+    assert not (tmp_path / "survey/questions").exists()
+    sources = json.loads((tmp_path / "survey/sources.json").read_text(encoding="utf-8"))["sources"]
+    assert [s["id"] for s in sources] == ["carport-photo", "carport-screenshot"]

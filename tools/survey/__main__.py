@@ -143,20 +143,22 @@ def _viewer_camera(bcfv: Path, picture: Path) -> dict:
 
 
 def _fit(wd: Path, src: dict, args, now: str) -> dict:
-    from .intake import IntakeError, ask_align, confined, fit_points, fit_viewer, no_fit
+    from .intake import ask_align, confined, fit_points, fit_viewer, no_fit
 
     if src["kind"] == "text" or src.get("illustrative"):
         return no_fit(wd, src["id"])
+    model = confined(wd, args.model)
+    if not model.exists():
+        # Nothing to line the picture up with, and nothing the person could point at: not a failed fit, and no
+        # question (staging 2026-11-26: "mark four points on the model" for a carport not yet built).
+        return {"id": src["id"], "sha256": src["sha256"], "fit": "awaiting_model"}
     if src["kind"] != "viewer_screenshot" and not args.points:
         ask_align(wd, src["id"], now=now, topic=args.topic)
         return {"id": src["id"], "sha256": src["sha256"], "fit": "failed"}
     from .scene import Scene
 
-    model = confined(wd, args.model)
-    scene = Scene.from_ifc(model) if model.exists() else None
+    scene = Scene.from_ifc(model)
     if src["kind"] == "viewer_screenshot":
-        if scene is None:
-            raise IntakeError(f"no model at {args.model} to fit the screenshot against")
         return fit_viewer(wd, src["id"], scene, now=now, topic=args.topic)
     pts = json.loads(confined(wd, args.points).read_text(encoding="utf-8"))
     return fit_points(wd, src["id"], pts, now=now, scene=scene, topic=args.topic)

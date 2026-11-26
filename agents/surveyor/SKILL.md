@@ -46,7 +46,9 @@ they know it was understood.
    python -m tools.survey add --workdir . --picture files/brief.txt --kind text --title "Brief"
    ```
 
-   Each prints one JSON line: `fit` is `passed`, `failed`, `not_a_picture` or `illustrative`, with the
+   Each prints one JSON line: `fit` is `passed`, `failed`, `not_a_picture`, `illustrative` or
+   `awaiting_model` (there is no model yet: the picture is kept, nothing is fitted, and you ask the person
+   nothing about lining it up, because there is no model they could point at), with the
    camera version, the overlay (the picture with the model drawn on it) and the share of model pixels
    within 2 px of the picture. For a photo the gate is its **outline** on the model's (`outlineWithinPx`,
    holes closed): a lattice that fills the frame puts almost any model pixel on some structure, so the share
