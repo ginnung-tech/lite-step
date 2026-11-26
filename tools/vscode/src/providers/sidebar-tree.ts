@@ -11,17 +11,29 @@
 import * as vscode from "vscode";
 import { LiteStepServer } from "../server";
 import { probeBlenderConnection } from "../blender-client";
+import type { GinnungRemoteLink } from "../git-remote";
 
 export type TreeItemType =
   | "section"
   | "server-status"
   | "web-app-status"
   | "blender-status"
+  | "git-remote-status"
   | "action-push-web"
   | "action-push-blender"
   | "action-preview"
+  | "action-git-link"
+  | "action-git-pull"
+  | "action-git-push"
   | "action-start-server"
   | "action-stop-server";
+
+export interface GitRemoteSidebarStatus {
+  signedIn: boolean;
+  link: GinnungRemoteLink | null;
+}
+
+export type GitStatusProvider = () => Promise<GitRemoteSidebarStatus>;
 
 export class LiteStepTreeItem extends vscode.TreeItem {
   constructor(
@@ -57,10 +69,14 @@ export class LiteStepSidebarProvider
 
   private _blenderOnline: boolean = false;
   private _blenderChecking: boolean = false;
+  private _gitStatus: GitRemoteSidebarStatus = { signedIn: false, link: null };
   private _probeTimer: ReturnType<typeof setInterval> | null = null;
   private _disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly server: LiteStepServer) {
+  constructor(
+    private readonly server: LiteStepServer,
+    private readonly gitStatusProvider?: GitStatusProvider
+  ) {
     // Listen to server status changes
     this._disposables.push(
       server.onDidChangeStatus(() => {
@@ -74,11 +90,25 @@ export class LiteStepSidebarProvider
     }, 8000);
     setTimeout(() => {
       void this.probeBlender().catch(() => {});
+      void this.refreshGitStatus().catch(() => {});
     }, 0);
+  }
+
+  public async refreshGitStatus(): Promise<void> {
+    if (!this.gitStatusProvider) return;
+    try {
+      this._gitStatus = await this.gitStatusProvider();
+      this._onDidChangeTreeData.fire();
+    } catch {
+      // Ignore git probe errors
+    }
   }
 
   public refresh(): void {
     this._onDidChangeTreeData.fire();
+    if (this.gitStatusProvider) {
+      void this.refreshGitStatus().catch(() => {});
+    }
   }
 
   public async probeBlender(): Promise<void> {
@@ -109,132 +139,164 @@ export class LiteStepSidebarProvider
       return [];
     }
 
-    const items: LiteStepTreeItem[] = [];
     const config = vscode.workspace.getConfiguration("litestep");
     const vscPort = this.server.port;
     const blenderPort = config.get<number>("blenderPort", 9876);
 
-    // ── 1. VS Code Server Status ─────────────────────────────
+    return [
+      this._buildServerStatusItem(vscPort),
+      this._buildWebAppItem(vscPort),
+      this._buildBlenderItem(blenderPort),
+      this._buildGitRemoteItem(),
+      ...this._buildQuickActionItems(blenderPort),
+    ];
+  }
+
+  private _buildServerStatusItem(vscPort: number): LiteStepTreeItem {
     if (this.server.isRunning) {
-      items.push(
-        new LiteStepTreeItem(
-          "VS Code Server: Running",
-          "server-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: `ws://127.0.0.1:${vscPort}`,
-            tooltip: `VS Code Lite-STEP WebSocket Server is ACTIVE on port ${vscPort}\nConnected Web Clients: ${this.server.clientCount}`,
-            iconPath: new vscode.ThemeIcon(
-              "check",
-              new vscode.ThemeColor("testing.iconPassed")
-            ),
-            contextValue: "serverRunning",
-          }
-        )
-      );
-    } else {
-      items.push(
-        new LiteStepTreeItem(
-          "VS Code Server: Stopped",
-          "server-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: `Port ${vscPort}`,
-            tooltip: `VS Code Lite-STEP WebSocket Server is STOPPED. Click to start.`,
-            iconPath: new vscode.ThemeIcon(
-              "circle-slash",
-              new vscode.ThemeColor("testing.iconFailed")
-            ),
-            contextValue: "serverStopped",
-            command: {
-              command: "litestep.startServer",
-              title: "Start Server",
-            },
-          }
-        )
+      return new LiteStepTreeItem(
+        "VS Code Server: Running",
+        "server-status",
+        vscode.TreeItemCollapsibleState.None,
+        {
+          description: `ws://127.0.0.1:${vscPort}`,
+          tooltip: `VS Code Lite-STEP WebSocket Server is ACTIVE on port ${vscPort}\nConnected Web Clients: ${this.server.clientCount}`,
+          iconPath: new vscode.ThemeIcon(
+            "check",
+            new vscode.ThemeColor("testing.iconPassed")
+          ),
+          contextValue: "serverRunning",
+        }
       );
     }
+    return new LiteStepTreeItem(
+      "VS Code Server: Stopped",
+      "server-status",
+      vscode.TreeItemCollapsibleState.None,
+      {
+        description: `Port ${vscPort}`,
+        tooltip: "VS Code Lite-STEP WebSocket Server is STOPPED. Click to start.",
+        iconPath: new vscode.ThemeIcon(
+          "circle-slash",
+          new vscode.ThemeColor("testing.iconFailed")
+        ),
+        contextValue: "serverStopped",
+        command: {
+          command: "litestep.startServer",
+          title: "Start Server",
+        },
+      }
+    );
+  }
 
-    // ── 2. Web App Connection Indicator ───────────────────────
+  private _buildWebAppItem(vscPort: number): LiteStepTreeItem {
     const webClients = this.server.clientCount;
     if (this.server.isRunning && webClients > 0) {
-      items.push(
-        new LiteStepTreeItem(
-          "Web App: Connected",
-          "web-app-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: `${webClients} client${webClients > 1 ? "s" : ""} active`,
-            tooltip: `Web Client is connected and ready for pushes!`,
-            iconPath: new vscode.ThemeIcon(
-              "globe",
-              new vscode.ThemeColor("charts.green")
-            ),
-            contextValue: "webAppConnected",
-          }
-        )
-      );
-    } else {
-      items.push(
-        new LiteStepTreeItem(
-          "Web App: Disconnected",
-          "web-app-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: this.server.isRunning
-              ? "Listening on ws://127.0.0.1:" + vscPort
-              : "Server off",
-            tooltip:
-              "No web client currently connected. Open a client and connect.",
-            iconPath: new vscode.ThemeIcon(
-              "plug",
-              new vscode.ThemeColor("disabledForeground")
-            ),
-            contextValue: "webAppDisconnected",
-          }
-        )
+      return new LiteStepTreeItem(
+        "Web App: Connected",
+        "web-app-status",
+        vscode.TreeItemCollapsibleState.None,
+        {
+          description: `${webClients} client${webClients > 1 ? "s" : ""} active`,
+          tooltip: "Web Client is connected and ready for pushes!",
+          iconPath: new vscode.ThemeIcon(
+            "globe",
+            new vscode.ThemeColor("charts.green")
+          ),
+          contextValue: "webAppConnected",
+        }
       );
     }
+    return new LiteStepTreeItem(
+      "Web App: Disconnected",
+      "web-app-status",
+      vscode.TreeItemCollapsibleState.None,
+      {
+        description: this.server.isRunning
+          ? `Listening on ws://127.0.0.1:${vscPort}`
+          : "Server off",
+        tooltip: "No web client currently connected. Open a client and connect.",
+        iconPath: new vscode.ThemeIcon(
+          "plug",
+          new vscode.ThemeColor("disabledForeground")
+        ),
+        contextValue: "webAppDisconnected",
+      }
+    );
+  }
 
-    // ── 3. Blender Connection Indicator ────────────────────────
+  private _buildBlenderItem(blenderPort: number): LiteStepTreeItem {
     if (this._blenderOnline) {
-      items.push(
-        new LiteStepTreeItem(
-          "Blender: Connected",
-          "blender-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: `ws://127.0.0.1:${blenderPort}`,
-            tooltip: `Blender Lite-STEP server is ONLINE and ready to receive models!`,
-            iconPath: new vscode.ThemeIcon(
-              "symbol-misc",
-              new vscode.ThemeColor("charts.green")
-            ),
-            contextValue: "blenderOnline",
-          }
-        )
-      );
-    } else {
-      items.push(
-        new LiteStepTreeItem(
-          "Blender: Disconnected",
-          "blender-status",
-          vscode.TreeItemCollapsibleState.None,
-          {
-            description: `Port ${blenderPort} unreachable`,
-            tooltip: `Blender Lite-STEP server is OFFLINE. Make sure Blender is running and the Lite-STEP server is started.`,
-            iconPath: new vscode.ThemeIcon(
-              "symbol-misc",
-              new vscode.ThemeColor("disabledForeground")
-            ),
-            contextValue: "blenderOffline",
-          }
-        )
+      return new LiteStepTreeItem(
+        "Blender: Connected",
+        "blender-status",
+        vscode.TreeItemCollapsibleState.None,
+        {
+          description: `ws://127.0.0.1:${blenderPort}`,
+          tooltip: "Blender Lite-STEP server is ONLINE and ready to receive models!",
+          iconPath: new vscode.ThemeIcon(
+            "symbol-misc",
+            new vscode.ThemeColor("charts.green")
+          ),
+          contextValue: "blenderOnline",
+        }
       );
     }
+    return new LiteStepTreeItem(
+      "Blender: Disconnected",
+      "blender-status",
+      vscode.TreeItemCollapsibleState.None,
+      {
+        description: `Port ${blenderPort} unreachable`,
+        tooltip: "Blender Lite-STEP server is OFFLINE. Make sure Blender is running and the Lite-STEP server is started.",
+        iconPath: new vscode.ThemeIcon(
+          "symbol-misc",
+          new vscode.ThemeColor("disabledForeground")
+        ),
+        contextValue: "blenderOffline",
+      }
+    );
+  }
 
-    // ── 4. Quick Actions ─────────────────────────────────────
-    items.push(
+  private _buildGitRemoteItem(): LiteStepTreeItem {
+    if (this._gitStatus.link) {
+      const link = this._gitStatus.link;
+      return new LiteStepTreeItem(
+        `Ginnung Git: ${link.remoteName} → ${link.projectId}`,
+        "git-remote-status",
+        vscode.TreeItemCollapsibleState.None,
+        {
+          description: this._gitStatus.signedIn ? "token set" : "no client token",
+          tooltip: `Remote: ${link.remoteName} (${link.remoteUrl})\nAPI: ${link.apiBaseUrl}\nScope: ${link.scope}`,
+          iconPath: new vscode.ThemeIcon(
+            "git-branch",
+            new vscode.ThemeColor(
+              this._gitStatus.signedIn ? "charts.green" : "testing.iconQueued"
+            )
+          ),
+          contextValue: "gitRemoteLinked",
+        }
+      );
+    }
+    return new LiteStepTreeItem(
+      "Ginnung Git: Not linked",
+      "git-remote-status",
+      vscode.TreeItemCollapsibleState.None,
+      {
+        description: this._gitStatus.signedIn ? "token set — click to link" : "click to link",
+        tooltip: "Link a named 'ginnung' remote to this workspace (preserves origin)",
+        iconPath: new vscode.ThemeIcon("git-branch"),
+        contextValue: "gitRemoteUnlinked",
+        command: {
+          command: "litestep.gitLinkRemote",
+          title: "Link Ginnung Git Remote",
+        },
+      }
+    );
+  }
+
+  private _buildQuickActionItems(blenderPort: number): LiteStepTreeItem[] {
+    const items: LiteStepTreeItem[] = [
       new LiteStepTreeItem(
         "Push Model to Web App",
         "action-push-web",
@@ -276,9 +338,59 @@ export class LiteStepSidebarProvider
             title: "Preview Model",
           },
         }
-      )
-    );
+      ),
+    ];
 
+    if (this._gitStatus.link) {
+      const link = this._gitStatus.link;
+      items.push(
+        new LiteStepTreeItem(
+          `Pull from '${link.remoteName}'`,
+          "action-git-pull",
+          vscode.TreeItemCollapsibleState.None,
+          {
+            description: link.projectId,
+            tooltip: `git pull ${link.remoteName} main`,
+            iconPath: new vscode.ThemeIcon("repo-pull"),
+            command: {
+              command: "litestep.gitPull",
+              title: "Pull from Ginnung",
+            },
+          }
+        ),
+        new LiteStepTreeItem(
+          `Push to '${link.remoteName}'`,
+          "action-git-push",
+          vscode.TreeItemCollapsibleState.None,
+          {
+            description: link.projectId,
+            tooltip: `git push ${link.remoteName} main`,
+            iconPath: new vscode.ThemeIcon("repo-push"),
+            command: {
+              command: "litestep.gitPush",
+              title: "Push to Ginnung",
+            },
+          }
+        )
+      );
+    } else {
+      items.push(
+        new LiteStepTreeItem(
+          "Link Ginnung Git Remote",
+          "action-git-link",
+          vscode.TreeItemCollapsibleState.None,
+          {
+            description: "Keeps origin untouched",
+            tooltip: "Add named 'ginnung' remote and repo-local credential helper",
+            iconPath: new vscode.ThemeIcon("plug"),
+            command: {
+              command: "litestep.gitLinkRemote",
+              title: "Link Ginnung Git Remote",
+            },
+          }
+        )
+      );
+    }
     return items;
   }
 
