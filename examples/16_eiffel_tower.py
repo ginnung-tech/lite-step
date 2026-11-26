@@ -331,7 +331,7 @@ def build_floors():
     floors = Element(ifc_class="IfcBuildingElementProxy", name="floors")
     # 1st floor girder (Poutre du 1er Etage), L5..L6, outer crossbow to outer crossbow, in the outer
     # face planes; lattice: chords, verticals at the plate's bay 3.8825 m, a St Andrew cross per bay.
-    for face in FACES:  # the floor's exterior side is 70.695 m (PL. I): the girder runs past the crossbows
+    for face in FACES:  # the floor's exterior side is FIRST_FLOOR_WIDTH (PL. I: 70.695 m): the girder runs past the crossbows
         floors.add(lattice_girder(f"first_girder_{face}", face, Z[5], Z[6],
                                   lambda z: FIRST_FLOOR_HALF, lambda z: outer_at(z)))
     # arc beam (Poutre de l'Arc), L4..L5, between the inner crossbows
@@ -406,8 +406,8 @@ def build_floors():
         xb.add(member("d1", [a0, b1], BRACE))
         xb.add(member("d2", [a1, b0], BRACE))
         floors.add(xb)
-    # 1st floor deck (ring: outer 70.695 m, open centre)
-    o, i = 70.695 / 2, PIER[6][0]
+    # 1st floor deck (ring: outer side FIRST_FLOOR_WIDTH, open centre)
+    o, i = FIRST_FLOOR_HALF, PIER[6][0]
     for name, (x0, y0, x1, y1) in {"deck1_s": (-o, -o, o, -i), "deck1_n": (-o, i, o, o),
                                    "deck1_w": (-o, -i, -i, i), "deck1_e": (i, -i, o, i)}.items():
         floors.add(Element(ifc_class="IfcSlab", name=name).add(Box(start=P(x0, y0, Z[6] - 0.3), end=P(x1, y1, Z[6]), color=IRON)))
