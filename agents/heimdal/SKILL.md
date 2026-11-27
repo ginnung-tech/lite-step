@@ -25,7 +25,8 @@ model source, not the model. Two roles never write the same file.
 | `dimensions.json`, `coverage.json`, `shots.json`, `ink/` | what is measured, where, from which picture |
 | `log.jsonl` | decisions, with the script and output that support them |
 | `scripts/` | the code you ran |
-| `brief.md` | what the material shows, assembled, for Gróa: structure, context to model, sizes and their sources |
+| `plan.json` | the plan you keep across rounds: what the building is, how sure, what is open, this round's decision |
+| `iterations.jsonl` | one line per round, appended by whoever runs you (see The plan) |
 | `index.json` | every file above with its size and hash; **written last** |
 
 ## First: assemble what you have
@@ -45,22 +46,57 @@ A person's material is short and incomplete: a one-line request, a photo or thre
    its openings and corner, a shed, a slab edge). Only it can place a camera on a repeating structure.
 5. **Find scale twice**: two independent known sizes (a door, a stepladder, a standard post, a size the person
    gave). If they disagree, ask the person for one length; do not pick one.
-6. **Write `brief.md`** for Gróa: the structure as you read it, the context to model (as existing, sizes as
-   named numbers), the sizes with their source and spread, and what no source shows.
+6. **Update the plan** (`plan.json`, below): the structure as you read it, the context to model (as existing,
+   sizes as named numbers), the sizes with their source and spread, and what no source shows.
 7. **Ask only for what nothing on hand supplies**, one thing at a time.
 
 ## Three gates, in order
 
 1. **Is the model the right building?** Compare its structure with the pictures (counts, members, layers,
-   directions, connections); this needs no camera. If it differs, say what differs in `brief.md` and do not
+   directions, connections); this needs no camera. If it differs, say what differs in the plan and do not
    fit: lining a picture up with the wrong building can only fail or, worse, pass by chance.
 2. **Can the picture be placed?** It needs reference context in the model (step 4 above). If the context is
-   missing, ask Gróa for it in `brief.md`; if the picture shows none, or where it was taken from is unclear,
+   missing, ask Gróa for it in the plan's instruction; if the picture shows none, or where it was taken from is unclear,
    ask the person.
 3. **Measure.** Then `measure` (5b) and the minions' rounds.
 
 A picture of our own viewer (the issue's snapshot) lines up with the model by construction: it is taken in
 and fitted, but it measures nothing about the building and is never reported as agreement.
+
+## The plan
+
+`survey/plan.json` (contract `survey` 1.4) is what you hold the building to be, how sure you are of each part, and what
+you cannot settle yet. Each time you run on a request is a **round**: read everything, update the plan, measure the
+model against it, decide.
+
+- `purpose`: `capture` (something that exists), `design` (something new), or `mix`.
+- `items`: one per part, count, layout or size. A stable `id` (lowercase, `-`), a `name`, a `value` (integer mm with
+  `unit: mm`, or `deg`, `count`, `ratio`, or short text for a layout), `uncertainty` in the same unit, the `source`,
+  `sure` (`sure`, `measured`, `guess`, `unreliable`), and `model`: does the current model meet it (`met`, `not_met`,
+  `unknown`).
+- `open`: what you cannot settle. `contradiction` (with at least two `readings`, each with its source), `question`
+  (for the person), `missing` (no material shows it). `since` is the round it was opened.
+- `closed`: an open entry or an item that is gone, with its `reason` and `round`.
+- `changes`: an item whose value moved, with `from`, `to`, `reason` and `round`.
+- `decision`: `round`, `maxRounds`, `request`, `kind` (`converged`, `instruct` or `ask`), `previousCheck` (did the
+  last instruction's check pass on this model), and for `instruct` one `instruction` for Gróa in the model's own named
+  sizes and parts, saying what not to touch, with its `check` (what you will measure on the next version); for `ask`
+  one `question`, as a choice with its consequence.
+
+Rules, checked in code after you finish (a plan that breaks one is handed back once, then the round fails):
+
+1. **Ids are stable.** Nothing leaves `items` or `open` without a `closed` entry and its reason.
+2. **A moved value is said.** If a value moves by more than the two readings' uncertainties together
+   (`sqrt(a^2 + b^2)`), or its text changes, add a `changes` entry for this round with the reason: a later explicit
+   correction over an earlier remark, a measurement over an estimate, intent over fact when the work is design, fact
+   over intent when it is capture. If nothing on hand settles it, keep both readings as an open `contradiction` and
+   let the next build test the working one. Never settle it by who said it.
+3. **Rounds are counted per request**, by whoever runs you: it tells you the round, `maxRounds` (3) and the request.
+   At the last round decide `converged` or `ask`; you may still write the instruction you would give next, for the
+   person to decide. Run by hand, count this request's lines in `iterations.jsonl` and append the round's line yourself.
+4. **One instruction per round**, small enough that its check can say it worked.
+
+The plan is posted on the request: what changed and why, what is open, the decision. Gróa reads the instruction there.
 
 ## Taking pictures in
 
@@ -120,7 +156,7 @@ they know it was understood.
    nothing it measured is a measurement; usually an element the script holds at fixed coordinates that the photo
    disagrees with (Gróa placed the shed at numbers, not named sizes), or a member the model lacks. Find which
    element's points carry the error (`residualPx`), then either add its position dimensions to `--keys` or leave
-   its points out, and say which in `brief.md`. A size flagged `uncertain` (its spread is over half its value) is
+   its points out, and say which in the plan. A size flagged `uncertain` (its spread is over half its value) is
    not written into the edited script and is not handed to Gróa. A point far off the rest (an occluded foot read
    at what hides it) is dropped and listed in `dropped` with its error; that alone is fine.
    `measure` corrects sizes, not parts: when the picture shows members the model lacks, its error stays high
