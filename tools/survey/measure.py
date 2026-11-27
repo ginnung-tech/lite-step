@@ -3,9 +3,9 @@
 A first build from a reference picture has the right parts and guessed sizes. Fitting a camera to that model
 cannot succeed: the control points sit where the GUESS put them, so even correctly labelled points disagree,
 and the fit is refused (staging 2026-11-26, a carport built from one photo: 150 mm posts on a 3 m grid against
-300 mm posts on a 4 m grid in the picture). The loop Surveyor -> Gróa -> minions never starts.
+300 mm posts on a 4 m grid in the picture). The loop Heimdal -> Gróa -> minions never starts.
 
-Here the picture measures the guess instead. The person's (or the Surveyor's) control points name an
+Here the picture measures the guess instead. The person's (or Heimdal's) control points name an
 element's box corner, e.g. ``post_0_0:xmin,ymax,zmin``. Each dimension of the script (an UPPER_CASE
 module-level number or tuple of numbers, ``param(...)`` included) is perturbed once and the script compiled,
 which gives how every named corner moves with it; a model made of boxes moves linearly, so this is exact for

@@ -5,7 +5,7 @@ This directory contains editor and CAD extensions for working with **Lite-STEP**
 - **[Blender Extension](blender/)**: Live synchronization bridge for Blender (5.0+) with Bonsai and PBR presentation rendering.
 - **[VS Code Extension](vscode/)**: Authoring, compilation, 3D preview, and multi-target push synchronization for Lite-STEP DSL files (`.py`).
 - **[Lapin](lapin/)**: Lite-STEP models in [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller: push a model in, and keep it up to date as the script changes.
-- **[Survey](survey/)**: snap drawings, screenshots and photos to cameras and measure them against a model (a library for the Surveyor's own scripts).
+- **[Survey](survey/)**: snap drawings, screenshots and photos to cameras and measure them against a model (a library for Heimdal's own scripts).
 - **[6-Axis Renderer](render/)**: Headless ThatOpen (`IfcImporter` + `FragmentsManager` with `LodMode.ALL_VISIBLE`) renderer outputting 6 cardinal/aerial PNG views of any compiled `.ifc`.
 
 ---
@@ -118,7 +118,7 @@ The script wins a conflict: a push overwrites a value changed in Lapin that was 
 A library for checking a model against its sources: drawings, screenshots, photos. Every source gets a
 camera, measurements are read from the source through that camera, and the model is drawn back onto the
 source so a person can see it. It is a library first because the useful questions are rarely the ones a
-fixed command foresaw: the Surveyor (or any coding agent) writes short scripts on top of it.
+fixed command foresaw: Heimdal (or any coding agent) writes short scripts on top of it.
 
 ```bash
 pip install -r tools/survey/requirements.txt   # OpenCV; numpy comes with Lite-STEP
@@ -151,7 +151,7 @@ python -m tools.survey index --workdir .
 
 `add` copies the picture into `survey/sources/` (the same bytes twice are one source), lists it in
 `sources.json`, and fits a camera: a viewer screenshot by the BCF viewpoint it was taken from, anything else
-from four or more control points (`[{"px": [x, y], "world": [x, y, z], "by": "surveyor"}]`). Every fit is a new
+from four or more control points (`[{"px": [x, y], "world": [x, y, z], "by": "heimdal"}]`). Every fit is a new
 camera version in `cameras.json` carrying its evidence: `overlay` (the picture with the model's outline in
 red, control points green where the picture has them, ringed where the camera puts them) and `agreement`
 (share of model pixels within 2 px of the picture). A fit under its gate (80 % for a viewer screenshot, 4 px
@@ -164,7 +164,7 @@ survey-question 1.2: each a camera, its control points and an overlay, ranked by
 pose-k` freezes the one the person picked as the next camera version. `partials` writes one cropped shot per detail (a perspective
 camera follows the crop: principal point; lens distortion is in the camera too), `ink` a photo's structure and
 openings (class 5, sky seen through the structure; rounds score them as `openings`). `index` writes `survey/index.json` (every file but `rounds/`, with
-size and sha256): last, after the files are kept. The Surveyor's instructions: `agents/surveyor/SKILL.md`.
+size and sha256): last, after the files are kept. Heimdal's instructions: `agents/heimdal/SKILL.md`.
 Tests: `test_tools_survey_intake.py`.
 
 ### Inspecting: a round of minions

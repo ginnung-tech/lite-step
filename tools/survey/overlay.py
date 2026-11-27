@@ -1,6 +1,6 @@
 """Pictures for people: the model drawn on their source, and where the two agree.
 
-These are what a person is shown when they give a picture (the Surveyor's duty to fit every picture and
+These are what a person is shown when they give a picture (Heimdal's duty to fit every picture and
 show it back): their image with the model's lines on it, and the agreement map.
 """
 
