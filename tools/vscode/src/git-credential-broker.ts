@@ -71,9 +71,43 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+export const TRUSTED_API_ORIGINS: ReadonlySet<string> = new Set([
+  "https://api.ginnung.tech",
+  "https://staging-api.grab.technology",
+]);
+
+export function isTrustedStandaloneApiBaseUrl(
+  candidate: string,
+  env: NodeJS.ProcessEnv = process.env,
+  standaloneApiBaseUrl?: string
+): boolean {
+  let normalized: string;
+  try {
+    normalized = validateApiBaseUrl(candidate);
+  } catch {
+    return false;
+  }
+  if (TRUSTED_API_ORIGINS.has(normalized)) {
+    return true;
+  }
+  for (const userConfigured of [env.GINNUNG_API_BASE_URL, standaloneApiBaseUrl]) {
+    const raw = userConfigured?.trim();
+    if (!raw) continue;
+    try {
+      if (validateApiBaseUrl(raw) === normalized) {
+        return true;
+      }
+    } catch {
+      // Ignore malformed env/config entry
+    }
+  }
+  return false;
+}
+
 export class GitCredentialBroker {
   private readonly _getClientToken: () => Promise<string | undefined>;
   private readonly _getApiBaseUrl: () => string;
+  private readonly _getAllowedProjects?: () => Promise<ReadonlySet<string>>;
   private readonly _configDir: string;
   private readonly _fetchImpl: typeof fetch;
   private readonly _cache = new Map<string, GitTokenResponse>();
@@ -83,11 +117,13 @@ export class GitCredentialBroker {
   constructor(opts: {
     getClientToken: () => Promise<string | undefined>;
     getApiBaseUrl: () => string;
+    getAllowedProjects?: () => Promise<ReadonlySet<string>>;
     configDir?: string;
     fetchImpl?: typeof fetch;
   }) {
     this._getClientToken = opts.getClientToken;
     this._getApiBaseUrl = opts.getApiBaseUrl;
+    this._getAllowedProjects = opts.getAllowedProjects;
     this._configDir = getGinnungConfigDir(opts.configDir);
     this._fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -221,6 +257,54 @@ export class GitCredentialBroker {
     return null;
   }
 
+  private async _isProjectAllowed(projectId: string): Promise<boolean> {
+    if (!this._getAllowedProjects) {
+      return true;
+    }
+    const allowed = await this._getAllowedProjects();
+    if (allowed.has(projectId)) {
+      return true;
+    }
+    return projectId === "default" && allowed.has("P0001");
+  }
+
+  private _parseVerifiedApiBase(body: Record<string, unknown>): { ok: true; apiBaseUrl: string } | { ok: false; status: number; code: string; message: string } {
+    let configuredBase: string;
+    try {
+      configuredBase = validateApiBaseUrl(this._getApiBaseUrl() || DEFAULT_API_BASE_URL);
+    } catch (err) {
+      return {
+        ok: false,
+        status: 500,
+        code: "bad_config",
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+
+    if (typeof body.apiBaseUrl === "string" && body.apiBaseUrl.trim()) {
+      let requestedBase: string;
+      try {
+        requestedBase = validateApiBaseUrl(body.apiBaseUrl);
+      } catch (err) {
+        return {
+          ok: false,
+          status: 400,
+          code: "bad_request",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+      if (requestedBase !== configuredBase) {
+        return {
+          ok: false,
+          status: 403,
+          code: "untrusted_api_base_url",
+          message: "Refusing token request for untrusted API base URL",
+        };
+      }
+    }
+    return { ok: true, apiBaseUrl: configuredBase };
+  }
+
   private async _handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -236,6 +320,10 @@ export class GitCredentialBroker {
 
     if (req.method !== "POST" || req.url !== "/token") {
       send(404, { code: "not_found", message: "Unknown broker route" });
+      return;
+    }
+    if (req.headers.origin) {
+      send(403, { code: "forbidden", message: "Cross-origin broker requests are forbidden" });
       return;
     }
 
@@ -254,16 +342,25 @@ export class GitCredentialBroker {
 
     const body = parsedBody.body;
     let tokenReq: GitTokenRequest;
-    let apiBaseUrl: string;
     try {
       tokenReq = this._parseTokenRequest(body);
-      const requestedBase =
-        typeof body.apiBaseUrl === "string" && body.apiBaseUrl.trim()
-          ? body.apiBaseUrl
-          : this._getApiBaseUrl() || DEFAULT_API_BASE_URL;
-      apiBaseUrl = validateApiBaseUrl(requestedBase);
     } catch (err) {
       send(400, { code: "bad_request", message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+
+    const apiCheck = this._parseVerifiedApiBase(body);
+    if (!apiCheck.ok) {
+      send(apiCheck.status, { code: apiCheck.code, message: apiCheck.message });
+      return;
+    }
+    const apiBaseUrl = apiCheck.apiBaseUrl;
+
+    if (tokenReq.target === "project" && !(await this._isProjectAllowed(tokenReq.projectId))) {
+      send(403, {
+        code: "project_not_linked",
+        message: "Project is not linked in any open workspace folder",
+      });
       return;
     }
 
@@ -541,6 +638,11 @@ export async function resolveCredentialForRequest(opts: {
   // Tier 2: Standalone token fallback (terminal agents when IDE is closed).
   if (standalone) {
     const effectiveBase = linked ? apiBaseUrl : standalone.apiBaseUrl || apiBaseUrl;
+    if (!isTrustedStandaloneApiBaseUrl(effectiveBase, env, standalone.apiBaseUrl)) {
+      throw new Error(
+        `Refusing to send Ginnung client token to untrusted API base URL '${effectiveBase}'`
+      );
+    }
     const minted = await mintGitToken(effectiveBase, standalone.token, req, fetchImpl);
     return { username: "x", password: stripTokenQuery(minted.token) };
   }
