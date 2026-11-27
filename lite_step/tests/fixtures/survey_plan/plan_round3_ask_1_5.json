@@ -1,0 +1,112 @@
+{
+  "version": "1.5",
+  "purpose": "capture",
+  "items": [
+    {
+      "id": "layout",
+      "name": "Layout",
+      "value": "3 rows of 3 posts; one beam per row on the post tops; joists across",
+      "source": "photos a, b, c and the person's words",
+      "sure": "sure",
+      "model": "met"
+    },
+    {
+      "id": "bay",
+      "name": "Bay, post to post along a row",
+      "value": 3304,
+      "unit": "mm",
+      "uncertainty": 120,
+      "source": "measure, photos a and c",
+      "sure": "measured",
+      "model": "met"
+    },
+    {
+      "id": "post-height",
+      "name": "Post height, slab to beam",
+      "value": 2060,
+      "unit": "mm",
+      "uncertainty": 198,
+      "source": "measure, photos a, c and the person's markup",
+      "sure": "measured",
+      "model": "met"
+    },
+    {
+      "id": "post",
+      "name": "Post section",
+      "value": 184,
+      "unit": "mm",
+      "source": "held: the stepladder and an 8x8 post agree",
+      "sure": "sure",
+      "model": "met"
+    },
+    {
+      "id": "top-beams",
+      "name": "Top layer of beams, left to right",
+      "value": "missing in the model",
+      "source": "the person's markup on photo d",
+      "sure": "sure",
+      "model": "not_met"
+    }
+  ],
+  "open": [
+    {
+      "id": "shed-distance",
+      "kind": "missing",
+      "text": "The shed's distance: no points constrain its depth.",
+      "since": 1
+    },
+    {
+      "id": "post-height-readings",
+      "kind": "contradiction",
+      "item": "post-height",
+      "text": "Two measure runs disagree on the post height.",
+      "readings": [
+        {
+          "value": 2465,
+          "source": "round 1, photos a and c"
+        },
+        {
+          "value": 2060,
+          "source": "round 2, photos a, c and d"
+        }
+      ],
+      "since": 2
+    }
+  ],
+  "closed": [
+    {
+      "id": "photo-b",
+      "reason": "Labelled in round 2; its points agree with photos a and c.",
+      "round": 2
+    }
+  ],
+  "changes": [
+    {
+      "item": "post-height",
+      "from": 2465,
+      "to": 2060,
+      "round": 2,
+      "reason": "Round 2 adds photo d, whose beam ends fix the height better; kept open until the next build is measured."
+    }
+  ],
+  "decision": {
+    "round": 3,
+    "maxRounds": 3,
+    "request": "9f1c2e4a-0b7d-4c55-9f0e-2a1d6c3b8e71",
+    "kind": "ask",
+    "question": "Three rounds on this request. The next step would settle the post height. Build it?",
+    "instruction": "Set POST_H to 2060 and keep everything else.",
+    "check": "Photo a's post feet and beam undersides within 15 px.",
+    "previousCheck": "passed",
+    "checkResult": {
+      "sources": [
+        "photo-a-outside-wide"
+      ],
+      "measured": 6.5,
+      "expected": 0,
+      "tolerance": 15,
+      "unit": "px",
+      "output": "measure/round-2.json"
+    }
+  }
+}

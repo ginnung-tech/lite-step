@@ -178,6 +178,48 @@ See [`tools/`](tools/) for editor and CAD tooling:
 - **Blender Add-on**: WebSocket bridge syncing IFC models into Blender 5.0+ with Bonsai and presentation PBR rendering.
 - **Lapin**: `lite-step lapin push model.py` links the compiled model into [Lapin](https://github.com/Ciuntuc-BIM-Studio/lapin), an open-source desktop BIM modeller, and reloads it on the next push. Parameters edited in Lapin come back into the script with `lite-step lapin pull model.py`, or by themselves under `push --watch`; a plain push does not pull, and replaces Lapin's values with the script's (it says which).
 
+## Checking a model against pictures: Heimdal and the minions
+
+A model is only as good as its match to what it should be. Give it the material you have (site photos,
+screenshots, drawings, a few words) and two tools measure it, in numbers, never by eye:
+
+- **Heimdal** ([`agents/heimdal/SKILL.md`](agents/heimdal/SKILL.md)) is a skill for any coding agent. It takes
+  each picture into the project's `survey/` folder, fits a camera to it and shows the fit back (or asks you to
+  line it up), keeps a **plan** of what the building is and how sure it is of each part, and per round decides:
+  done, one next instruction for whoever builds the model, or one question for you.
+- **The minions** (`python -m tools.survey inspect`) render the model through every fitted camera and measure
+  where it differs from each picture: per element, the shift that would line it up.
+
+Both run locally, on CPU, with no network. From this checkout, with your project in `../carport/` (its
+`output.py`, `output.ifc` and pictures):
+
+```bash
+pip install -r tools/survey/requirements.txt          # OpenCV and Embree
+
+# take a photo in: four or more control points (pixel -> model coordinate) fit its camera
+python -m tools.survey add --workdir ../carport --picture files/site.jpg --kind photo \
+    --title "Site" --points pts.json --model output.ifc
+
+# a round of minions on model version 1
+python -m tools.survey inspect --workdir ../carport --n 1 --model output.ifc --model-version 1
+
+# Heimdal's plan, one round: begin, write survey/plan.json, check, record
+python -m tools.survey plan begin  --workdir ../carport --request add-top-beams
+python -m tools.survey plan check  --workdir ../carport
+python -m tools.survey plan record --workdir ../carport
+```
+
+In practice you hand the agent the skill and your material and it runs these. The checks `plan check` makes
+are the ones a host runs after Heimdal: ids stay stable, a moved value is said, at most three rounds per
+request, and a check is a number measured on your own pictures. Details: [`tools/README.md`](tools/README.md)
+§3b.
+
+**Validators.** Two more skills check a finished model against a written spec (`spec.md`; template in
+[`agents/spec-template.md`](agents/spec-template.md)), read-only: [`agents/validation/ifc`](agents/validation/ifc/SKILL.md)
+reads the IFC (counts, sizes, which wall an opening is on) and [`agents/validation/vision`](agents/validation/vision/SKILL.md)
+renders six views with [`tools/render`](tools/render/) and looks at them. Each writes `validation-errors.md`
+(a verdict on its first line) and a one-line `summary.txt`.
+
 ## Agents
 
 [`AGENTS.md`](AGENTS.md) is the working guide for coding agents — where the

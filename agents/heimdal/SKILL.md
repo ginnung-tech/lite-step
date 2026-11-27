@@ -93,7 +93,10 @@ Rules, checked in code after you finish (a plan that breaks one is handed back o
    let the next build test the working one. Never settle it by who said it.
 3. **Rounds are counted per request**, by whoever runs you: it tells you the round, `maxRounds` (3) and the request.
    At the last round decide `converged` or `ask`; you may still write the instruction you would give next, for the
-   person to decide. Run by hand, count this request's lines in `iterations.jsonl` and append the round's line yourself.
+   person to decide. Run by hand, the same checks are three commands: `python -m tools.survey plan begin --request R`
+   before you read anything (it keeps what the round starts from and tells you the round and its rules),
+   `python -m tools.survey plan check` once `plan.json` is written (fix what it lists, then check again), and
+   `python -m tools.survey plan record` to append the round to `iterations.jsonl`. Never write that file yourself.
 4. **One instruction per round**, small enough that its check can say it worked.
 5. **A check is a number measured on the person's own pictures**, never "the part is present in the model": the model
    is what is being checked, so it cannot also be the evidence. An instruction carries `checkSpec`: the person's

@@ -183,8 +183,8 @@ would line it up, ink the model lacks as world boxes at the model's depth) and a
 sources see the displacement's direction, and reports directions no view sees as unknown, never zero. The
 model is measured from a snapshot (its sha256 is in `round.json`); the pool starts processes fresh (never
 forked), one per core but one, at lower priority. A round that cannot run is written as `status: failed` with its error. One process per
-core; the scene is tessellated once per model file and cached by its hash. Shapes: the Ginnung `survey`
-contract, 1.1.
+core; the scene is tessellated once per model file and cached by its hash. Shapes: the `survey` contract,
+1.1.
 
 | Module | What it does |
 | --- | --- |
@@ -195,6 +195,34 @@ contract, 1.1.
 On the Eiffel run (306 shots, v12) it reproduces the earlier minion's ink-weighted F (0.7995 against 0.7996,
 median shot within 0.002) in 36 s on 10 processes once the scene is cached; tessellating the 4.9 MB model is
 the larger cost (about 70 s).
+
+### Heimdal's plan, by hand
+
+`survey/plan.json` (survey 1.5) is Heimdal's plan across rounds: the parts of the building with value,
+uncertainty, source and whether the model meets them; what is open (contradictions, questions, missing);
+what was closed or changed and why; and the round's decision. `tools/survey/plan.py` checks it, the same
+checks a host runs after Heimdal. Run by hand, a round is three commands:
+
+```bash
+python -m tools.survey plan begin  --workdir . --request R [--model output.ifc]   # before reading anything
+python -m tools.survey plan check  --workdir .   # after plan.json is written; exit 1 lists the broken rules
+python -m tools.survey plan record --workdir .   # appends the round to iterations.jsonl (refused if broken)
+```
+
+`begin` keeps the plan and every survey file's hash in `survey/.plan-round.json` and prints the round
+(counted per request in `iterations.jsonl`), `maxRounds` (3) and this round's rules. `check` holds the plan
+to them:
+
+- ids are stable: nothing leaves `items` or `open` without a `closed` entry and its reason;
+- a value that moves beyond the two readings' uncertainty (`sqrt(a^2 + b^2)`) has a `changes` entry for this
+  round;
+- the round and request are the counted ones, and the last round is `converged` or `ask`;
+- a request's first round, and a round on the same model as the last, report `previousCheck: not_checked`;
+- an instruction carries `checkSpec`, and a reported check or `converged` carries `checkResult`: a number
+  measured on the person's own pictures (never a viewer screenshot, text or an illustration), each with a
+  passed camera, its `output` a file under `survey/` written this round.
+
+Tests: `test_tools_survey_plan.py` (the fixtures are a real carport plan whose round 3 broke the rules).
 
 ---
 
