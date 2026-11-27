@@ -137,7 +137,7 @@ describe("Ginnung named Git remote & credential helper", () => {
 
   it("validates API base URLs and canonical project IDs strictly", () => {
     assert.equal(validateApiBaseUrl("https://api.ginnung.tech/"), "https://api.ginnung.tech");
-    assert.equal(validateApiBaseUrl("https://staging-api.grab.technology"), "https://staging-api.grab.technology");
+    assert.equal(validateApiBaseUrl("https://api.test.example"), "https://api.test.example");
     assert.equal(validateApiBaseUrl("http://127.0.0.1:8787/"), "http://127.0.0.1:8787");
     assert.throws(() => validateApiBaseUrl("http://api.ginnung.tech"));
     assert.throws(() => validateApiBaseUrl("https://user:pass@api.ginnung.tech"));
@@ -340,29 +340,57 @@ describe("Ginnung named Git remote & credential helper", () => {
       assert.notEqual(foreign.code, 0);
       assert.equal(foreign.stdout, "");
 
-      // Matching host with IDE closed -> falls back to GINNUNG_CLIENT_TOKEN
+      // Matching host with IDE closed -> falls back to GINNUNG_CLIENT_TOKEN when user sets GINNUNG_API_BASE_URL
       const envOk = await runHelperCli(
         "get",
         "protocol=https\nhost=74e705963052a47dff544a3b3c5943fc.artifacts.cloudflare.net\npath=git/staging/user_01.P0007.git\n\n",
         repo,
-        { GINNUNG_CONFIG_DIR: configDir, GINNUNG_CLIENT_TOKEN: "standalone_tok" }
+        {
+          GINNUNG_CONFIG_DIR: configDir,
+          GINNUNG_CLIENT_TOKEN: "standalone_tok",
+          GINNUNG_API_BASE_URL: api.url,
+        }
       );
       assert.equal(envOk.code, 0, envOk.stderr);
       assert.equal(envOk.stdout, "username=x\npassword=art_v2_standalone_secret\n");
 
-      // Token file fallback (~/.ginnung/client-token.json)
+      // Token file fallback (~/.ginnung/client-token.json) with user-trusted apiBaseUrl
       fs.writeFileSync(
         path.join(configDir, "client-token.json"),
-        JSON.stringify({ token: "standalone_tok" })
+        JSON.stringify({ token: "standalone_tok", apiBaseUrl: api.url })
       );
       const fileOk = await runHelperCli(
         "get",
         "protocol=https\nhost=74e705963052a47dff544a3b3c5943fc.artifacts.cloudflare.net\npath=git/staging/user_01.P0007.git\n\n",
         repo,
-        { GINNUNG_CONFIG_DIR: configDir, GINNUNG_CLIENT_TOKEN: "" }
+        { GINNUNG_CONFIG_DIR: configDir, GINNUNG_CLIENT_TOKEN: "", GINNUNG_API_BASE_URL: "" }
       );
       assert.equal(fileOk.code, 0, fileOk.stderr);
       assert.equal(fileOk.stdout, "username=x\npassword=art_v2_standalone_secret\n");
+
+      // Untrusted repo .git/config ginnung.apiBaseUrl (attacker exfil) must be refused
+      const attackerRepo = mkTmp("ginnung-attacker-repo-");
+      tempDirs.push(attackerRepo);
+      await runGit(["init", "-b", "main"], attackerRepo);
+      await configureGinnungRemote({
+        repoRoot: attackerRepo,
+        remoteName: "ginnung",
+        remoteUrl,
+        projectId: "P0007",
+        apiBaseUrl: "https://attacker.example",
+        helperCommand: formatCredentialHelperCommand(process.execPath, HELPER_PATH),
+      });
+      const callsBeforeAttacker = api.calls.length;
+      const attackerRes = await runHelperCli(
+        "get",
+        "protocol=https\nhost=74e705963052a47dff544a3b3c5943fc.artifacts.cloudflare.net\npath=git/staging/user_01.P0007.git\n\n",
+        attackerRepo,
+        { GINNUNG_CONFIG_DIR: configDir, GINNUNG_CLIENT_TOKEN: "standalone_tok", GINNUNG_API_BASE_URL: "" }
+      );
+      assert.notEqual(attackerRes.code, 0);
+      assert.equal(attackerRes.stdout, "");
+      assert.match(attackerRes.stderr, /untrusted API base URL/i);
+      assert.equal(api.calls.length, callsBeforeAttacker);
 
       // store / erase are strict no-ops
       const storeRes = await runHelperCli("store", "protocol=https\nhost=example.com\n\n", repo, {
@@ -370,6 +398,68 @@ describe("Ginnung named Git remote & credential helper", () => {
       });
       assert.equal(storeRes.code, 0);
       assert.equal(storeRes.stdout, "");
+    } finally {
+      await api.close();
+    }
+  });
+
+  it("GitCredentialBroker blocks cross-origin requests, untrusted apiBaseUrl, and unlinked projectIds", async () => {
+    const configDir = mkTmp("ginnung-sec-cfg-");
+    tempDirs.push(configDir);
+    const api = await startMockTokenServer({ expectedBearer: "secret_tok" });
+    try {
+      const broker = new GitCredentialBroker({
+        getClientToken: async () => "secret_tok",
+        getApiBaseUrl: () => api.url,
+        getAllowedProjects: async () => new Set(["P0001"]),
+        configDir,
+      });
+      const meta = await broker.start();
+      try {
+        // 1. Browser Origin header -> 403
+        const corsRes = await fetch(`http://127.0.0.1:${meta.port}/token`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Broker-Secret": meta.secret,
+            Origin: "https://evil.example",
+          },
+          body: JSON.stringify({ projectId: "P0001", scope: "write" }),
+        });
+        assert.equal(corsRes.status, 403);
+
+        // 2. Untrusted apiBaseUrl override -> 403 and 0 upstream calls
+        const exfilRes = await fetch(`http://127.0.0.1:${meta.port}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Broker-Secret": meta.secret },
+          body: JSON.stringify({
+            projectId: "P0001",
+            scope: "write",
+            apiBaseUrl: "https://attacker.example",
+          }),
+        });
+        assert.equal(exfilRes.status, 403);
+
+        // 3. Unlinked projectId -> 403
+        const otherProj = await fetch(`http://127.0.0.1:${meta.port}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Broker-Secret": meta.secret },
+          body: JSON.stringify({ projectId: "P0099", scope: "write" }),
+        });
+        assert.equal(otherProj.status, 403);
+        assert.equal(api.calls.length, 0);
+
+        // 4. Linked projectId -> 200
+        const okRes = await fetch(`http://127.0.0.1:${meta.port}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Broker-Secret": meta.secret },
+          body: JSON.stringify({ projectId: "P0001", scope: "write" }),
+        });
+        assert.equal(okRes.status, 200);
+        assert.equal(api.calls.length, 1);
+      } finally {
+        await broker.stop();
+      }
     } finally {
       await api.close();
     }

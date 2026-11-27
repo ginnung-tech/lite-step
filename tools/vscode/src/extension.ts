@@ -111,6 +111,7 @@ export function activate(context: vscode.ExtensionContext) {
   gitBroker = new GitCredentialBroker({
     getClientToken: async () => context.secrets.get(GIT_TOKEN_SECRET_KEY),
     getApiBaseUrl: () => getConfiguredApiBaseUrl(),
+    getAllowedProjects: () => getAllowedWorkspaceProjectIds(),
   });
   void gitBroker.start().catch((err) => {
     console.warn(`[Lite-STEP] Failed to start Ginnung Git credential broker: ${err}`);
@@ -619,6 +620,23 @@ async function getWorkspaceGitLink(): Promise<GinnungRemoteLink | null> {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) return null;
   return readGinnungRemoteLink(folders[0].uri.fsPath);
+}
+
+async function getAllowedWorkspaceProjectIds(): Promise<ReadonlySet<string>> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return new Set();
+  }
+  const links = await Promise.all(
+    folders.map((folder) => readGinnungRemoteLink(folder.uri.fsPath).catch(() => null))
+  );
+  const allowed = new Set<string>();
+  for (const link of links) {
+    if (link?.projectId) {
+      allowed.add(link.projectId);
+    }
+  }
+  return allowed;
 }
 
 async function promptProjectId(initialValue = "P0001"): Promise<string | undefined> {

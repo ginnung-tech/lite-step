@@ -231,7 +231,7 @@
         "litestep.apiBaseUrl": {
           "type": "string",
           "default": "https://api.ginnung.tech",
-          "description": "Base URL of the Ginnung API used to mint Cloudflare Artifacts Git tokens (for example https://api.ginnung.tech or https://staging-api.grab.technology)"
+          "description": "Base URL of the Ginnung API used to mint Cloudflare Artifacts Git tokens (default https://api.ginnung.tech; another API, such as a test environment, is trusted only when set here, in GINNUNG_API_BASE_URL or in ~/.ginnung/client-token.json)"
         },
         "litestep.gitRemoteName": {
           "type": "string",
