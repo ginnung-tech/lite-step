@@ -152,7 +152,7 @@ def test_bcf_viewpoint_cameras_read_and_write(tmp_path):
         camera_from_bcfv('<VisualizationInfo><OrthogonalCamera/></VisualizationInfo>', 10, 10)
 
 
-def test_the_index_lists_the_surveyors_files_not_the_rounds(tmp_path):
+def test_the_index_lists_heimdals_files_not_the_rounds(tmp_path):
     pic = screenshot(tmp_path)
     add_source(tmp_path, pic, kind="photo", title="Photo", now=NOW)
     (tmp_path / "survey/rounds/1").mkdir(parents=True)
@@ -193,3 +193,15 @@ def test_no_path_leaves_the_working_directory(tmp_path, capsys):
     assert main(["add", "--workdir", str(wd), "--picture", str(tmp_path / "outside.png"), "--kind", "photo",
                  "--title", "x"]) == 2
     assert "outside" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_heimdal_is_the_default_author_and_the_older_name_is_still_read(tmp_path):
+    """Contract survey 1.3: the Surveyor is named Heimdal; files written before keep `surveyor`."""
+    pic = screenshot(tmp_path)
+    src = add_source(tmp_path, pic, kind="photo", title="Photo", now=NOW)
+    pts = [{"px": CAM.project([w])[0].tolist(), "world": w} for w in corners()]
+    pts[0]["by"] = "surveyor"
+    fit_points(tmp_path, src["id"], pts, now=NOW, scene=scene())
+    cam = table(tmp_path, "cameras.json")["cameras"][-1]
+    by = [cp["by"] for cp in (cam.get("controlPoints") or cam.get("registration", {}).get("controlPoints", []))]
+    assert by and by[0] == "surveyor" and set(by[1:]) == {"heimdal"}

@@ -1,6 +1,6 @@
 """Survey tools: snap sources (drawings, screenshots, photos) to cameras and measure them against a model.
 
-A library first: the Surveyor (`agents/surveyor`, or any coding agent) writes its own scripts on top of it,
+A library first: Heimdal (`agents/heimdal`, or any coding agent) writes its own scripts on top of it,
 because the questions that matter are rarely the ones a fixed command foresaw. CPU only, no network.
 
 - `camera`: orthographic and perspective cameras, projection both ways, contract shapes.

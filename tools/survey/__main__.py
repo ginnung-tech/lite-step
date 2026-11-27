@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--convention")
     add.add_argument("--origin")
     add.add_argument("--id", dest="source_id")
-    add.add_argument("--by", default="surveyor", choices=["person", "surveyor", "groa", "minion"])
+    add.add_argument("--by", default="heimdal", choices=["person", "heimdal", "groa", "minion", "surveyor"])  # surveyor: the older name of heimdal
     add.add_argument("--bcfv", help="the viewer's viewpoint (.bcfv) a viewer_screenshot was taken with")
     add.add_argument("--points", help="a JSON list of control points [{px, world, by}] (four or more)")
     add.add_argument("--model", default="output.ifc", help="the model to fit against (relative to the workdir)")

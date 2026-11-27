@@ -1,8 +1,8 @@
 """Taking a picture into a survey: store it, fit a camera to it, show the fit back, or ask.
 
-The Surveyor's duty is to fit every picture a person gives and show it back (spec: minion visual inspection,
+Heimdal's duty is to fit every picture a person gives and show it back (spec: minion visual inspection,
 3.0). These are the deterministic steps it calls; deciding what a picture is, and finding control points in a
-photo, stay the Surveyor's own work (it writes scripts on this library for that).
+photo, stay Heimdal's own work (it writes scripts on this library for that).
 
 - `add_source`: copy the picture into `survey/sources/`, hash it, list it in `sources.json`. The same bytes
   twice are one source.
@@ -12,7 +12,7 @@ photo, stay the Surveyor's own work (it writes scripts on this library for that)
 - `fit_points`: a photo or another tool's screenshot, from control points (pixel and world, at least four).
 - Every fit is a new camera version in `cameras.json` with its evidence (`overlay`, `agreement`), passed or
   failed. A failed fit leaves an `align` question in `questions/`.
-- `write_index`: `index.json`, the Surveyor's files and their hashes, written last.
+- `write_index`: `index.json`, Heimdal's files and their hashes, written last.
 
 Shapes: the `survey` and `survey-question` contracts (version 1.2).
 """
@@ -174,7 +174,7 @@ def camera_to_bcf(cam: dict) -> dict:
 
 
 def add_source(workdir: str | Path, picture: str | Path, *, kind: str, title: str, now: str,
-               convention: str | None = None, origin: str | None = None, added_by: str = "surveyor",
+               convention: str | None = None, origin: str | None = None, added_by: str = "heimdal",
                source_id: str | None = None, viewer_camera: dict | None = None,
                illustrative: bool = False) -> dict:
     """Copy `picture` into survey/sources/ and list it. Returns the source entry (the existing one if these
@@ -430,7 +430,7 @@ def fit_points(workdir: str | Path, source_id: str, points: list[dict], *, now: 
     entry: dict[str, Any] = {
         "source": source_id, "version": version, "camera": cam.to_contract(), "method": "control_points",
         "controlPoints": [{"px": [float(v) for v in p["px"]], "world": [float(v) for v in p["world"]],
-                           "by": p.get("by", "surveyor"), **({"note": p["note"][:300]} if p.get("note") else {})}
+                           "by": p.get("by", "heimdal"), **({"note": p["note"][:300]} if p.get("note") else {})}
                           for p in points],
         "residualMm": round(residual_mm, 1), "gate": "passed" if passed else "failed", "frozenAt": now,
         "reason": (reason or f"{len(points)} control points, PnP; mean {f.residual_px:.1f} px")[:500],
@@ -560,7 +560,7 @@ def answer_align(workdir: str | Path, question_id: str, choice: str, *, now: str
         shutil.copyfile(confined(survey_dir(wd), option["evidence"][0]), confined(survey_dir(wd), frozen))
         entry = {
             "source": src["id"], "version": version, "camera": pose["camera"], "method": "control_points",
-            "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "surveyor"} for cp in pose["controlPoints"]],
+            "controlPoints": [{"px": cp["px"], "world": cp["world"], "by": "heimdal"} for cp in pose["controlPoints"]],
             "residualMm": _residual_mm(pose), "gate": "passed", "frozenAt": now,
             "reason": f"chosen by the person from {len(q.get('options', []))} candidate poses {marker}",
             "overlay": frozen,
@@ -646,7 +646,7 @@ def no_fit(workdir: str | Path, source_id: str) -> dict:
 
 
 def write_index(workdir: str | Path, *, now: str) -> dict:
-    """survey/index.json: every file of the Surveyor's (not rounds/, which the minions write), with its size and
+    """survey/index.json: every file of Heimdal's (not rounds/, which the minions write), with its size and
     hash. Write it last, after the files are kept."""
     s = survey_dir(workdir)
     files = []
