@@ -73,7 +73,6 @@ function constantTimeEqual(a: string, b: string): boolean {
 
 export const TRUSTED_API_ORIGINS: ReadonlySet<string> = new Set([
   "https://api.ginnung.tech",
-  "https://staging-api.grab.technology",
 ]);
 
 export function isTrustedStandaloneApiBaseUrl(

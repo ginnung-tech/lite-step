@@ -137,7 +137,7 @@ describe("Ginnung named Git remote & credential helper", () => {
 
   it("validates API base URLs and canonical project IDs strictly", () => {
     assert.equal(validateApiBaseUrl("https://api.ginnung.tech/"), "https://api.ginnung.tech");
-    assert.equal(validateApiBaseUrl("https://staging-api.grab.technology"), "https://staging-api.grab.technology");
+    assert.equal(validateApiBaseUrl("https://api.test.example"), "https://api.test.example");
     assert.equal(validateApiBaseUrl("http://127.0.0.1:8787/"), "http://127.0.0.1:8787");
     assert.throws(() => validateApiBaseUrl("http://api.ginnung.tech"));
     assert.throws(() => validateApiBaseUrl("https://user:pass@api.ginnung.tech"));
