@@ -95,6 +95,16 @@ Rules, checked in code after you finish (a plan that breaks one is handed back o
    At the last round decide `converged` or `ask`; you may still write the instruction you would give next, for the
    person to decide. Run by hand, count this request's lines in `iterations.jsonl` and append the round's line yourself.
 4. **One instruction per round**, small enough that its check can say it worked.
+5. **A check is a number measured on the person's own pictures**, never "the part is present in the model": the model
+   is what is being checked, so it cannot also be the evidence. An instruction carries `checkSpec`: the person's
+   source ids, what is measured on them, the expected number, the tolerance and the unit. When you report the last
+   check (`passed` or `failed`), and whenever you decide `converged`, add `checkResult`: the number you measured on
+   THIS model, its sources and `output`, the measurement's file you wrote under `survey/measure/` this round. Only a
+   picture with a lined-up camera (gate passed) can be measured; while a picture the request depends on is not lined
+   up, you cannot converge: ask the person to line it up, or measure on one that is.
+6. **A direction in a picture is not an axis.** "Left to right", "in front", "behind" are as seen in that picture; they
+   name model axes only once the picture's camera is fitted. Until then, say which picture they come from and keep
+   the reading open.
 
 The plan is posted on the request: what changed and why, what is open, the decision. Gróa reads the instruction there.
 
