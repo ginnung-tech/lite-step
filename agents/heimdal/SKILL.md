@@ -106,7 +106,10 @@ they know it was understood.
 1. Decide what each file is: `viewer_screenshot` (from our viewer, with the viewpoint it was taken from),
    `screenshot` (another program, no camera), `photo`, `elevation`, `plan`, `section`, `detail_plane`,
    `perspective`, `sketch`, or `text`. And what it draws (`front_slab`, `section`, `see_through`,
-   `silhouette`, `shaded`). A generated picture used to ask something is `--illustrative`, never measured.
+   `silhouette`, `shaded`). A generated picture used to ask something is `--illustrative`, never measured. Only a picture you made is illustrative.
+   A person's photo or screenshot with marks drawn on it (circles, arrows, words) is still a `photo` or `screenshot`:
+   take it in and fit it like any other, read the marks as what the person points at (they are annotation, not
+   structure), and put what they point at in the plan.
 2. Take it in:
 
    ```bash
