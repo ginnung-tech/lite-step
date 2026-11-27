@@ -4,7 +4,8 @@ python -m tools.survey index --workdir DIR
 python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
-python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]"""
+python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]
+python -m tools.survey plan begin --workdir DIR --request R [--model output.ifc]   (then check, then record)"""
 
 from __future__ import annotations
 
@@ -68,10 +69,17 @@ def main(argv: list[str] | None = None) -> int:
     mea.add_argument("--fix", action="append", required=True, help="a dimension held for scale (repeatable)")
     mea.add_argument("--keys", help="only these dimensions (comma-separated); default all")
     mea.add_argument("--write", help="write the script with the measured dimensions here")
+    pln = sub.add_parser("plan", help="Heimdal's plan by hand: begin a round, check plan.json, record the round")
+    pln.add_argument("action", choices=["begin", "check", "record"])
+    pln.add_argument("--workdir", default=".")
+    pln.add_argument("--request", help="begin: the request this round is on (any stable id)")
+    pln.add_argument("--model", default="output.ifc", help="begin: the model this round measures")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.cmd == "add":
         return _add(args)
+    if args.cmd == "plan":
+        return _plan(args)
     if args.cmd == "measure":
         from .measure import main_measure
 
@@ -124,6 +132,32 @@ def main(argv: list[str] | None = None) -> int:
     result = run_round(wd, req, workers=args.workers)
     print(json.dumps({k: result.get(k) for k in ("n", "status", "error", "shotCount", "durationS", "inkWeightedF1")}))
     return 0 if result["status"] == "done" else 1
+
+
+def _plan(args) -> int:
+    """begin / check / record. Prints JSON; exit 0 clean, 1 the plan breaks a rule, 2 the command could not run."""
+    from .plan import PlanError, begin_round, check_round, record_round
+
+    wd = Path(args.workdir)
+    try:
+        if args.action == "begin":
+            if not args.request:
+                print(json.dumps({"error": "plan begin needs --request"}))
+                return 2
+            print(json.dumps(begin_round(wd, args.request, args.model), ensure_ascii=False, indent=1))
+            return 0
+        if args.action == "check":
+            problems = check_round(wd)
+            print(json.dumps({"ok": not problems, "problems": problems}, ensure_ascii=False, indent=1))
+            return 0 if not problems else 1
+        print(json.dumps(record_round(wd, _now()), ensure_ascii=False, indent=1))
+        return 0
+    except PlanError as e:
+        print(json.dumps({"ok": False, "problems": e.problems}, ensure_ascii=False, indent=1))
+        return 1
+    except (ValueError, OSError) as e:
+        print(json.dumps({"error": str(e)}))
+        return 2
 
 
 def _now() -> str:

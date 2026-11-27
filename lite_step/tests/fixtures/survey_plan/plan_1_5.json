@@ -1,0 +1,78 @@
+{
+  "version": "1.5",
+  "purpose": "capture",
+  "items": [
+    {
+      "id": "layout",
+      "name": "Layout",
+      "value": "3 rows of 3 posts; one beam per row on the post tops; joists across",
+      "source": "photos a, b, c and the person's words",
+      "sure": "sure",
+      "model": "met"
+    },
+    {
+      "id": "bay",
+      "name": "Bay, post to post along a row",
+      "value": 3304,
+      "unit": "mm",
+      "uncertainty": 120,
+      "source": "measure, photos a and c",
+      "sure": "measured",
+      "model": "met"
+    },
+    {
+      "id": "post-height",
+      "name": "Post height, slab to beam",
+      "value": 2465,
+      "unit": "mm",
+      "uncertainty": 85,
+      "source": "measure, photos a and c",
+      "sure": "measured",
+      "model": "not_met"
+    },
+    {
+      "id": "post",
+      "name": "Post section",
+      "value": 184,
+      "unit": "mm",
+      "source": "held: the stepladder and an 8x8 post agree",
+      "sure": "sure",
+      "model": "met"
+    }
+  ],
+  "open": [
+    {
+      "id": "shed-distance",
+      "kind": "missing",
+      "text": "The shed's distance: no points constrain its depth.",
+      "since": 1
+    },
+    {
+      "id": "photo-b",
+      "kind": "missing",
+      "text": "Photo b (inside) is not labelled yet.",
+      "since": 1
+    }
+  ],
+  "closed": [],
+  "changes": [],
+  "decision": {
+    "round": 1,
+    "maxRounds": 3,
+    "request": "9f1c2e4a-0b7d-4c55-9f0e-2a1d6c3b8e71",
+    "kind": "instruct",
+    "instruction": "Set POST_H to 2465. Keep every other named size, the house and the garage opening.",
+    "check": "The posts and beams line up with photos a and c within 15 px.",
+    "previousCheck": "not_checked",
+    "checkSpec": {
+      "sources": [
+        "photo-a-outside-wide",
+        "photo-c-outside-corner"
+      ],
+      "quantity": "top-layer member outline against the photos' marked members",
+      "expected": 0,
+      "tolerance": 15,
+      "unit": "px"
+    }
+  }
+}

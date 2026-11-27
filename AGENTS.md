@@ -132,4 +132,35 @@ LITESTEP_CARVE_REPORT=all python output.py   # every carve pair (=0 silences)
 LITESTEP_EMIT_DRAWINGS=0  python output.py   # skip the 2D stylesheet — faster
 ```
 
+## 7. Other skills: Heimdal, the minions, the validators
+
+Everything above is about writing the model. These skills check it, and none of them edits `output.py`.
+
+| Skill | Use it when | Writes |
+| --- | --- | --- |
+| [`agents/heimdal/SKILL.md`](agents/heimdal/SKILL.md) | someone gives pictures, drawings or notes the model should match, or asks how well it does | `survey/` only |
+| [`agents/validation/ifc/SKILL.md`](agents/validation/ifc/SKILL.md) | a build is done and there is a `spec.md` to hold it to | `validation-errors.md`, `summary.txt` |
+| [`agents/validation/vision/SKILL.md`](agents/validation/vision/SKILL.md) | the same, by looking: six rendered views against the spec | `render_*.png`, `validation-errors.md`, `summary.txt` |
+
+A `spec.md` follows [`agents/spec-template.md`](agents/spec-template.md).
+
+**Running as Heimdal.** Read the whole skill first. The library is `tools/survey`, run from this repo's root
+with `--workdir` at the project (`python -m tools.survey …`; `tools/` is not installed by `pip install -e .`).
+Install its extras once: `pip install -r tools/survey/requirements.txt`. One round on a request:
+
+1. `python -m tools.survey plan begin --workdir P --request R`: prints the round, `maxRounds` and the rules
+   for this round, and keeps the plan and the survey as they were.
+2. Take pictures in (`add`), fit, measure (`measure`, `inspect`), as the skill says. Write `survey/plan.json`.
+3. `python -m tools.survey plan check --workdir P`: the same checks a host runs. Exit 1 lists what breaks a
+   rule; fix the plan and check again.
+4. `python -m tools.survey plan record --workdir P` appends the round to `iterations.jsonl` (refused while a
+   rule is broken), then `python -m tools.survey index --workdir P` last.
+
+Then the decision: `instruct` is one change for whoever builds the model (`plan.json` → `decision.instruction`,
+with its `checkSpec`); build it, compile, and start the next round with `plan begin` again. `ask` is a question
+for the person; `converged` needs a passed check measured on the person's own pictures this round.
+
+The traps: a picture that is not lined up measures nothing (ask, do not converge); "left to right" in a photo
+is not an axis until its camera is fitted; counts and sizes come from geometry, never from looking.
+
 MIT licensed.
