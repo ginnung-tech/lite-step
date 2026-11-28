@@ -27,10 +27,27 @@ ty check output.py                # types — when a signature changed
 python output.py --check          # DRY RUN: validate + compile, write nothing
 python output.py --q <selector>   # INSPECTOR: what is this, and where is it?
 python output.py                  # compile -> output.ifc
+lite-step review output.py        # REVIEW: compile, IFC validation, defects found by geometry -> review/
 ```
 
-Done means **a clean compile and a non-empty `output.ifc` on disk** — not code
-that looks right. Read the error, not the symptom: stderr names the element.
+Done means **a clean compile, a non-empty `output.ifc` on disk, and `lite-step
+review` with no open error group** — not code that looks right. Read the error,
+not the symptom: stderr names the element.
+
+`lite-step review` (from this checkout; it needs nothing beyond Lite-STEP's own
+requirements) compiles the model, runs `ifcopenshell.validate`, and
+measures the geometry: **floating** parts (a group touching nothing that reaches
+the ground), **clashes** (two elements that are not parts of one thing share
+volume; a linear element set into another at its end is a joint, not a clash),
+**near misses** (a column, beam or member 5-150 mm short of meeting) and meshes
+that are not closed solids. It writes `review/findings.md` (read this) and
+`review/findings.json`, and exits 1 while an error group is open. Findings are
+grouped by kind and IFC classes, name elements by canonical name (pass them to
+`--q`), and carry their numbers. Fix the cause in `output.py`, or, when the
+contact is meant (a course laid inside its pavement), accept the group with the
+reason in `review/accepted.json`:
+`[{"group": "clash:IfcCourse|IfcPavement", "reason": "the course is a layer of the pavement"}]`.
+Never accept a floating group: something holds it up, so model it.
 
 `--check` and `--q` are read from `sys.argv` by `compile_main`, so they only
 work when the model runs directly. `python -m lite_step output.py --check` is an

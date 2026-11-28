@@ -60,8 +60,8 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv and argv[0] == "lapin":
-        return _run_tool("lapin", argv[1:])
+    if argv and argv[0] in ("lapin", "review"):
+        return _run_tool(argv[0], argv[1:])
 
     parser = argparse.ArgumentParser(
         prog="lite-step",
