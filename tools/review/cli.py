@@ -178,9 +178,10 @@ def _markdown(r: dict[str, Any]) -> str:
         if nums:
             lines.append(nums)
         for ex in g["examples"]:
-            names = ", ".join(_short(n) for n in ex["elements"])
-            lines.append(f"- {ex['summary'].splitlines()[0] if ex['kind'] != 'compile' else ex['summary']}"
-                         + (f" [{names}]" if names and ex["kind"] in ("clash", "near_miss") else ""))
+            text = ex["summary"].splitlines()[0] if ex["kind"] != "compile" else ex["summary"]
+            for n in sorted(ex["elements"], key=len, reverse=True):  # short names to read; findings.json has all
+                text = text.replace(n, f"`{_short(n)}`")
+            lines.append(f"- {text}")
         if g["count"] > len(g["examples"]):
             lines.append(f"- … {g['count'] - len(g['examples'])} more in findings.json")
         lines.append("")
