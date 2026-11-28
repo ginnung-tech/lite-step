@@ -104,10 +104,16 @@ Suggested steps (the trial that brought a statue in used `trimesh`, `pymeshlab` 
   model with the mesh in it. A found scan is a scan of *something*: a statuette, a maquette or a restored state may
   differ from the real thing, and only a measurement says by how much.
 
-How it gets into `output.py` today: the script cannot read files, so a mesh is written into it as vertex and face
-data (a compact encoding works; one trial packed 50 k triangles into base-85 text). That is valid, and a large
-script costs every agent that reads it. A clean mesh outside, brought in as data only when it is final, keeps the
-editable part of the script small.
+How it gets into `output.py`: save the cleaned mesh as `.ply` or `.stl` in the project (integer millimetres,
+already in the model's frame) and name it by path and hash:
+
+```python
+skin = Mesh(name="skin", asset="meshes/statue.ply", sha256="<sha256 of the file>")
+```
+
+The script stays small and still says exactly which bytes it builds from; a changed file is refused until its new
+hash is written in. Writing the vertices into the script as data also works (one trial packed 50 k triangles into
+base-85 text), and every agent that reads that script pays for it.
 
 ## 5. Measuring each version against the footage
 

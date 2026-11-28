@@ -4127,6 +4127,11 @@ class Mesh(BimElement):
     corner_max: Optional[Point2D] = None
     source_type: Optional[str] = None
     is_watertight: bool = False
+    #: Asset mode: a .ply/.stl in the project, in integer mm, named by path AND by the sha256 of its bytes
+    #: (``lite_step/models/mesh_asset.py``). Read at construction into ``vertices``/``faces``; the path and hash stay
+    #: on the element so the script still says exactly what it builds.
+    asset: Optional[str] = None
+    sha256: Optional[str] = None
     # Appearance override, consumed by the emitter: "#RRGGBB" or
     # "#RRGGBBAA" (alpha byte — e.g. "#9E9E9E80" = ghost massing at 50%).
     # Highest appearance precedence (spec §6): color= > material hex >
@@ -4183,7 +4188,24 @@ class Mesh(BimElement):
                      self.corner_min, self.corner_max)
         wants_heightmap = any(f is not None for f in hm_fields)
         wants_explicit = self.vertices is not None or self.faces is not None
+        wants_asset = self.asset is not None or self.sha256 is not None
 
+        if wants_asset:
+            if wants_heightmap or wants_explicit:
+                raise ValueError(
+                    "Mesh takes ONE of: vertices+faces, heightmap+..., or "
+                    "asset+sha256 — not two of them."
+                )
+            from .mesh_asset import is_closed, load
+
+            if self.asset is None:
+                raise ValueError("Mesh(sha256=...) needs asset= the file it is the hash of.")
+            verts, faces = load(self.asset, self.sha256)
+            # Validated ints already: build the points without re-validating each of tens of thousands.
+            self.vertices = [Point.model_construct(x=int(x), y=int(y), z=int(z)) for x, y, z in verts.tolist()]
+            self.faces = [tuple(f) for f in faces.tolist()]
+            self.is_watertight = self.is_watertight or is_closed(faces)
+            return self
         if wants_heightmap and wants_explicit:
             raise ValueError(
                 "Mesh takes EITHER vertices+faces OR "

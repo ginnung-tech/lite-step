@@ -113,9 +113,14 @@ Bar(path: list[Point], diameter: int, bend_radius=None, grade='B500B',
     bar_type='main'|'shear'|'stirrup'|'edge', mark=None, material=, color=)
 Sheet(profile: list[Point2D], thickness: int, path: list[Point])   # a FUNCTION returning a Sweep
 
-# Mesh takes ONE of two spellings, never both:
+# Mesh takes ONE of three spellings, never two:
 Mesh(vertices: list[Point], faces: list[(i, j, k)], color=, source_type=, is_watertight=False)
 Mesh(heightmap: list[list[int]], corner_min: Point2D, corner_max: Point2D, depth=|bottom_z=, color=)
+Mesh(asset: str, sha256: str, color=, source_type=)   # a .ply/.stl in the project, integer mm, named by its hash
+# asset mode: the path is relative and stays inside the project (the script's folder, or the working directory
+# when a host runs the script as a string; LITE_STEP_ASSET_ROOT overrides). sha256 is the file's: a changed file
+# is refused, never built. Coordinates must be whole millimetres (round and repair before export). At most 2M
+# triangles. is_watertight is computed from the faces. The script itself still reads no files.
 # heightmap mode names its base plane with exactly ONE of depth= / bottom_z=:
 # passing both raises, passing neither raises.
 # Mesh operations (immediate and chainable):
