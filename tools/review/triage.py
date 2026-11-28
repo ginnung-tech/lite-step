@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 TOUCH_M = 0.005  # closer than this is touching
 NEAR_MISS_M = 0.150  # a gap up to this, at a column/beam/member, is a near miss
 CLASH_MIN_M3 = 1e-7  # shared volume below this is numerical noise (0.1 cm3)
-CLASH_ERROR_MM = 10.0  # a structural clash deeper than this is an error
+CLASH_ERROR_MM = 20.0  # a structural clash deeper than this is an error (less is bearing tolerance: a slab seated in its wall)
 
 
 @dataclass
