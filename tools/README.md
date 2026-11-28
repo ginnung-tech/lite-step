@@ -178,6 +178,23 @@ python -m tools.survey add --workdir . --picture sheet.png --crop 270,630,900,11
     --title "South elevation" --view south --px-per-m 5.47 --points south-points.json
 ```
 
+### Cameras from a reconstruction
+
+```bash
+python -m tools.survey cameras --workdir . (--colmap recon/sparse/0 | --transforms transforms.json) \
+    --images recon/images --align align.json [--n 12] [--frames a.png,b.png]
+```
+
+Reads a COLMAP text model (`cameras.txt`, `images.txt`; camera models SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL,
+RADIAL, OPENCV) or a Nerfstudio / instant-ngp `transforms.json` (OpenGL convention), and takes `--n` frames spread
+around the structure (farthest-point over camera centres) in as photos with their cameras. A reconstruction's frame
+is its own, so `--align` is required: `{"points": [{"recon", "world"}, ...]}` (three or more; solved by Umeyama,
+gated at 100 mm or 0.5 % of the points' span, the worst pair named when it fails), `{"transform": {"scale",
+"rotation", "translation"}}`, or `{"identity": true, "reason"}`. The gate is the alignment's; the model's outline
+agreement is recorded with each overlay but does not fail a camera (a model that differs is what is about to be
+measured). Images must be the size the reconstruction solved and have square pixels (undistort first). Workflows:
+`agents/reconstruction/SKILL.md`. Tests: `test_tools_survey_recon.py`.
+
 ### Shape: a freeform mesh against a picture's outline
 
 ```bash
@@ -194,7 +211,9 @@ terms, the height range, the mean and largest error and the elements at the mode
 more than 3 m from the model and lines as wide as the picture are left out and reported (`ignoredPictureM2`).
 Writes `survey/shape/{source}-v{camera}.json` and an overlay (grey both, red only the model, blue only the
 picture). Exact millimetres through an orthographic camera; through a perspective one, at the model's median
-depth (`scaleNote`). Tests: `test_tools_survey_shape.py`.
+depth (`scaleNote`). Through an orthographic camera it also renders the opposite view and the two at right
+angles, each centred on the picture's subject, and warns (`viewCheck.warning`) when the chosen view is clearly worse:
+a drawing's title names the site's face, not the model's. Tests: `test_tools_survey_shape.py`.
 
 ### Inspecting: a round of minions
 
