@@ -5,6 +5,7 @@ python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
 python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]
+python -m tools.survey cameras --workdir DIR (--colmap DIR | --transforms FILE) --images DIR --align ALIGN.json [--n 12]
 python -m tools.survey shape --workdir DIR --source ID [--elements A,B] [--window u0,u1,v0,v1]
 python -m tools.survey plan begin --workdir DIR --request R [--model output.ifc]   (then check, then record)"""
 
@@ -47,6 +48,19 @@ def main(argv: list[str] | None = None) -> int:
                                     "top, or dx,dy,dz; fits an orthographic camera")
     add.add_argument("--crop", help="x0,y0,x1,y1: take in one figure of a sheet that holds several")
     add.add_argument("--px-per-m", type=float, help="a drawing's scale read off its scale bar: pins the scale")
+    rec = sub.add_parser("cameras", help="cameras from a reconstruction (COLMAP or transforms.json), aligned to the "
+                                         "model by a similarity transform you give (--align)")
+    rec.add_argument("--workdir", default=".")
+    grp = rec.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--colmap", help="a COLMAP text model folder (cameras.txt, images.txt)")
+    grp.add_argument("--transforms", help="a Nerfstudio / instant-ngp transforms.json")
+    rec.add_argument("--images", required=True, help="the folder of the images the reconstruction used")
+    rec.add_argument("--align", help="the alignment JSON: points known in both frames, a transform, or identity "
+                                     "with a reason (run without it to read what it must hold)")
+    rec.add_argument("--n", type=int, default=12, help="how many well-spread frames to take in")
+    rec.add_argument("--frames", help="these image names instead (comma-separated)")
+    rec.add_argument("--model", default="output.ifc")
+    rec.add_argument("--title", default="reconstruction")
     shp = sub.add_parser("shape", help="where the model's outline differs from a picture's, in mm, per height")
     shp.add_argument("--workdir", default=".")
     shp.add_argument("--source", required=True)
@@ -99,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         return _plan(args)
     if args.cmd == "shape":
         return _shape(args)
+    if args.cmd == "cameras":
+        return _cameras(args)
     if args.cmd == "measure":
         from .measure import main_measure
 
@@ -179,6 +195,35 @@ def _plan(args) -> int:
         return 2
 
 
+def _cameras(args) -> int:
+    """Prints the alignment and one line per frame taken in. Exit 0 aligned, 1 the alignment failed its gate (the
+    frames are kept, their cameras recorded as failed), 2 could not run (the message says what is missing)."""
+    from .intake import confined
+    from .recon import ReconError, import_frames, read_colmap, read_transforms
+
+    wd = Path(args.workdir).resolve()
+    try:
+        frames = read_colmap(confined(wd, args.colmap)) if args.colmap else read_transforms(confined(wd, args.transforms))
+        align = json.loads(confined(wd, args.align).read_text(encoding="utf-8")) if args.align else None
+        model = confined(wd, args.model)
+        scene = None
+        if model.exists():
+            from .scene import Scene
+
+            scene = Scene.from_ifc(model, cache_dir=wd / "survey" / ".cache")
+        r = import_frames(wd, frames, args.images, align, now=_now(), n=args.n,
+                          names=[s.strip() for s in args.frames.split(",")] if args.frames else None, scene=scene,
+                          title=args.title)
+    except (ReconError, ValueError, OSError, KeyError) as e:
+        print(json.dumps({"error": str(e)}))
+        return 2
+    print(json.dumps({"alignment": {k: r["alignment"][k] for k in ("method", "scale", "gate", "reason")},
+                      "taken": len(r["frames"]), "of": r["of"]}))
+    for f in r["frames"]:
+        print(json.dumps(f))
+    return 0 if r["alignment"]["gate"] == "passed" else 1
+
+
 def _shape(args) -> int:
     """Prints the findings (the full report is in survey/shape/). Exit 0 measured, 2 could not run."""
     from .shape import Window, run_shape
@@ -200,6 +245,8 @@ def _shape(args) -> int:
         return 2
     print(json.dumps({k: r[k] for k in ("source", "cameraVersion", "iou", "contour", "pictureM2", "modelM2",
                                         "toleranceMm", "overlay")}, ensure_ascii=False))
+    if r.get("viewCheck", {}).get("warning"):
+        print("WARNING:", r["viewCheck"]["warning"])
     for f in r["findings"][:12]:
         print("-", f["text"])
     if len(r["findings"]) > 12:

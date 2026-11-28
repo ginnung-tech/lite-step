@@ -177,7 +177,14 @@ they know it was understood.
    is not: on the statue trial (2026-11-28) the sheet's "EAST ELEVATION" was `--view west` and its "WEST" was
    `--view east`, and the wrong pair measured a 5 m lean that was not there. Decide each view from what the
    figure shows (which side the arm, the door, the tablet is on) against the model's frame, not from its title,
-   and check it: `shape` on the view you chose and on its opposite; the right one has the clearly higher `iou`.
+   and check it: `shape` compares the chosen view with the opposite one and the two at right angles (`viewCheck`)
+   and warns when the chosen one is clearly worse. While the model is still far from the picture, that says
+   which view is wrong better than which is right.
+4c. **Frames from a reconstruction come with their cameras** (video, a drone flight, a photo set solved by
+   COLMAP or similar): `python -m tools.survey cameras --colmap DIR | --transforms FILE --images DIR --align FILE`.
+   The reconstruction's frame is its own (no real origin, up or metre), so `--align` gives the similarity transform
+   onto the model: points known in both (four or more), a transform worked out elsewhere, or identity with the
+   reason. Without it the command refuses. Workflows and the why: `agents/reconstruction/SKILL.md`.
 5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
 5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
    sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport

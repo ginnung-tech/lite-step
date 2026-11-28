@@ -139,6 +139,7 @@ Everything above is about writing the model. These skills check it, and none of 
 | Skill | Use it when | Writes |
 | --- | --- | --- |
 | [`agents/heimdal/SKILL.md`](agents/heimdal/SKILL.md) | someone gives pictures, drawings or notes the model should match, or asks how well it does | `survey/` only |
+| [`agents/reconstruction/SKILL.md`](agents/reconstruction/SKILL.md) | someone brings video, drone footage, a photo set or a scan of the real thing | suggestions only: what to do outside Lite-STEP, and how cameras and clean meshes come back in |
 | [`agents/validation/ifc/SKILL.md`](agents/validation/ifc/SKILL.md) | a build is done and there is a `spec.md` to hold it to | `validation-errors.md`, `summary.txt` |
 | [`agents/validation/vision/SKILL.md`](agents/validation/vision/SKILL.md) | the same, by looking: six rendered views against the spec | `render_*.png`, `validation-errors.md`, `summary.txt` |
 

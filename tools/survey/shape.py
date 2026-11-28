@@ -291,6 +291,71 @@ def overlay(img_bgr: np.ndarray, picture: np.ndarray, model: np.ndarray) -> np.n
     return out
 
 
+VIEW_MARGIN = 0.08  # another view whose IoU beats the chosen one by this much is very likely the right one
+
+
+def _view_name(direction: np.ndarray) -> str:
+    from .intake import VIEWS
+
+    for name, (d, _) in VIEWS.items():
+        if np.allclose(direction, d, atol=1e-6):
+            return name
+    return ",".join(f"{v:g}" for v in np.round(direction, 4))
+
+
+def view_check(picture: np.ndarray, drone, cam: OrthoCamera, labels: list[str], chosen_iou: float, *,
+               selected: np.ndarray | None = None, window: Window | None = None) -> dict[str, Any]:
+    """The same picture against the model seen from the opposite side and from the two sides at right angles, at
+    the same scale and height, centred where the chosen view centres the model. A drawing's title names a face of
+    the SITE; `--view` names a face of the MODEL; when the model's axes are not the site's, the right view is not
+    the titled one, and only the outlines can tell (a statue trial's EAST panel was the model's west view)."""
+    import cv2
+
+    _, up, fwd = basis(cam.direction, cam.up)
+    win = _window_mask(cam, picture.shape, window or Window())
+    n, lab, stats, _ = cv2.connectedComponentsWithStats((picture & win).astype(np.uint8), connectivity=8)
+    if n <= 1:
+        return {"chosen": {"view": _view_name(fwd), "iou": chosen_iou}, "alternatives": []}
+    k = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))  # the picture's subject: its largest part
+    pic_cx = stats[k, cv2.CC_STAT_LEFT] + stats[k, cv2.CC_STAT_WIDTH] / 2.0
+
+    def iou_centred(d: np.ndarray) -> float:
+        """IoU of the model seen along `d`, slid sideways so its outline is centred on the picture's subject: each
+        candidate gets its best placement, so the comparison is about shape, not about where a fit put it."""
+        alt = OrthoCamera(tuple(np.asarray(d).tolist()), cam.up, cam.px_per_m, cam.k, cam.ax_px, cam.c_px,
+                          cam.image_w, cam.image_h, cam.depth_range_m)
+        f = drone.render(alt)
+        m = f.element >= 0 if selected is None else (f.element >= 0) & selected[np.clip(f.element, 0, None)]
+        cols = np.nonzero((m & win).any(axis=0))[0]
+        if not len(cols):
+            return 0.0
+        shift = pic_cx - (cols.min() + cols.max() + 1) / 2.0
+        alt = OrthoCamera(alt.direction, alt.up, alt.px_per_m, alt.k, alt.ax_px + shift, alt.c_px, alt.image_w,
+                          alt.image_h, alt.depth_range_m)
+        f = drone.render(alt)
+        return compare(picture, f.element, f.depth, alt, labels, selected=selected, window=window)["iou"]
+
+    chosen_best = max(chosen_iou, iou_centred(fwd))
+    alts = {"opposite": -fwd, "turned left": np.cross(up, fwd), "turned right": np.cross(fwd, up)}
+    out: dict[str, Any] = {"chosen": {"view": _view_name(fwd), "iou": chosen_iou, "iouCentred": round(chosen_best, 4)},
+                           "alternatives": []}
+    best = None
+    for what, d in alts.items():
+        iou = round(iou_centred(d), 4)
+        row = {"view": _view_name(np.asarray(d)), "as": what, "iou": iou}
+        out["alternatives"].append(row)
+        if best is None or iou > best["iou"]:
+            best = row
+    if best is not None and best["iou"] > chosen_best + VIEW_MARGIN:
+        ranked = ", ".join(f"{a['view']} {a['iou']:.2f}" for a in sorted(out["alternatives"], key=lambda a: -a["iou"]))
+        out["warning"] = (f"--view {out['chosen']['view']} is likely the wrong view for this picture: IoU "
+                          f"{chosen_best:.2f}, against {ranked}. A drawing's title names the site's face, not the "
+                          "model's. Decide from what the figure shows (which side the arm, the door, the stair is on) "
+                          "and refit; while the model is far from the picture the ranking says which view is wrong "
+                          "better than which is right.")
+    return out
+
+
 def run_shape(workdir: str | Path, source_id: str, *, model_file: str = "output.ifc", camera_version: int | None = None,
               elements: list[str] | None = None, window: Window | None = None, band_m: float = BAND_M,
               tol_mm: float = TOL_MM, threshold: int = 200, close_m: float = 0.3) -> dict[str, Any]:
@@ -333,6 +398,9 @@ def run_shape(workdir: str | Path, source_id: str, *, model_file: str = "output.
             raise IntakeError(f"no element's canonical name ends with any of {elements}")
     report = compare(picture, frame.element, frame.depth, cam, labels, selected=selected, window=window,
                      band_m=band_m, tol_mm=tol_mm)
+    if isinstance(cam, OrthoCamera):
+        drone = Drone(scene)
+        report["viewCheck"] = view_check(picture, drone, cam, labels, report["iou"], selected=selected, window=window)
     model = frame.element >= 0 if selected is None else (frame.element >= 0) & selected[np.clip(frame.element, 0, None)]
     win = _window_mask(cam, picture.shape, window or Window())
     rel = f"shape/{source_id}-v{entry['version']}"

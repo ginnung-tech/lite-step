@@ -214,6 +214,11 @@ are the ones a host runs after Heimdal: ids stay stable, a moved value is said, 
 request, and a check is a number measured on your own pictures. Details: [`tools/README.md`](tools/README.md)
 §3b.
 
+**Footage and scans.** [`agents/reconstruction/SKILL.md`](agents/reconstruction/SKILL.md) suggests workflows for video,
+drone flights and scans: reconstruct outside Lite-STEP, bring back clean meshes for what is freeform, and take the
+solved cameras in with `python -m tools.survey cameras`, aligned to the model by a transform you give (a
+reconstruction's own frame has no real origin, up or scale).
+
 **Validators.** Two more skills check a finished model against a written spec (`spec.md`; template in
 [`agents/spec-template.md`](agents/spec-template.md)), read-only: [`agents/validation/ifc`](agents/validation/ifc/SKILL.md)
 reads the IFC (counts, sizes, which wall an opening is on) and [`agents/validation/vision`](agents/validation/vision/SKILL.md)
