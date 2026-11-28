@@ -97,7 +97,8 @@ storey is unnamed; once it is named, pass `wall:north:storey:ground`.
    `IfcRelContainedInSpatialStructure` and make the spatial tree unnavigable.
    Nothing raises if you ignore this — the file is simply worse.
 7. **The namespace is restricted.** Imports are limited to `lite_step`, `math`,
-   `numpy` and `random`; there is no file I/O. A host may install a stricter
+   `numpy` and `random`; there is no file I/O. The one sanctioned read is a cleaned mesh named by path and
+   hash, `Mesh(asset="meshes/statue.ply", sha256="...")`: a scan belongs in a file, not in the script. A host may install a stricter
    AST guard on top, so treat anything dynamic as unavailable.
 
 ## 4. Required boilerplate
