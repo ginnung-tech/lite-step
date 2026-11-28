@@ -143,10 +143,19 @@ convention — is [`agents/dsl-reference.md`](agents/dsl-reference.md).
 ```bash
 python output.py --check            # compile + validate, write nothing
 python output.py --q wall:north     # where is it, really: authored / world / oriented boxes
+lite-step review output.py          # what is wrong with it: review/findings.md
 ```
 
 `--q` takes a SUFFIX of the canonical name, so once the storey is named ask for
 `wall:north:storey:ground`. The IFC it writes opens in any IFC viewer.
+
+`lite-step review` is the check to run before calling a model done, and the one
+to hand your coding agent: it compiles, validates the IFC, and measures the
+geometry for parts that float, elements that run through each other, and joints
+that stop short, by geometry, never by eye. Findings come grouped, with the
+elements' canonical names and the millimetres; a group that is meant goes into
+`review/accepted.json` with its reason. It exits 1 while an error is open, so
+an agent can loop on it. Details: [`tools/README.md`](tools/README.md) §5.
 
 ## Worked examples
 

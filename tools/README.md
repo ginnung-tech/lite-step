@@ -296,6 +296,44 @@ Programs on this computer run as you and are trusted; these rules are about web 
 
 ---
 
+## 5. Review (`tools/review`)
+
+```bash
+lite-step review output.py [--ifc output.ifc] [--out review/] [--no-compile]
+```
+
+The check to run before a model is called done, and the one to hand a coding agent: no model calls, every number
+measured. In order:
+
+1. **Compile** (`python output.py`); a compile failure ends the review, and `warning:` lines become findings.
+2. **Validate** the IFC with `ifcopenshell.validate` (errors only, the first 50).
+3. **Triage the geometry** on the scene `tools/survey` builds (cached in `review/.cache/` by the IFC's hash),
+   with exact solids from manifold3d:
+   - `floating`: a group of touching elements with nothing that reaches the ground or the model's lowest level
+     (error when it holds a structural element);
+   - `clash`: two elements that are not parts of one thing share volume. Not a clash: parts of one element; a
+     linear element set into another at one end (a beam in its column head, a cable anchor); walls lapped at a
+     corner or a T; the class pairs in `rules.py` (rebar in its host, a pile in its cap, a member seated in its
+     footing, anything in the ground). Error when both are structural and the overlap is deeper than 20 mm;
+   - `crossing`: two members crossing mid-length, as an X of bracing drawn as two whole bars (warning);
+   - `near_miss`: a column, beam or member 5-150 mm short of meeting another element (warning);
+   - `unchecked`: a mesh that is not a closed solid, so none of the above could be measured on it.
+
+Findings are grouped by kind and IFC classes (`clash:IfcBeam|IfcWall`), name elements by canonical name (pass
+them to `--q`), and carry their numbers (volume, depth, gap). It writes `review/findings.md` (read this) and
+`review/findings.json`, and exits **1 while an error group is open**, 2 when the review cannot run, 0 otherwise.
+A group whose contact is meant is accepted in `review/accepted.json` with its reason:
+`[{"group": "clash:IfcCourse|IfcPavement", "reason": "the course is a layer of the pavement"}]`; a row without a
+reason accepts nothing, and a floating group should never be accepted (something holds it up: model it).
+
+Exact checks are capped at three per pair of elements and the triage at 120 s; suspects left unmeasured are
+reported as a `budget` finding, never dropped silently. Loading a very large model is not in that budget.
+On the pack's 36 reference models and the Millau trial: the remaining errors are real modelling defects in the
+references (floor beams occupying their bent caps, a roof underlay cut through its rafters, a timber wall touching
+nothing), the rest warnings. Tests: `test_tools_review.py`.
+
+---
+
 ## Build Automation
 
 To build both tools at once:
