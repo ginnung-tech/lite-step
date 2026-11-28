@@ -121,6 +121,9 @@ With aligned cameras, every model version is measured like any other survey:
 
 - `python -m tools.survey shape --source FRAME` for the outline (sky or background against the model), per height
   and side in millimetres, with the elements at fault.
+- `python -m tools.survey depth --source FRAME --depth-map ...` with the reconstruction's depth map for that frame:
+  per element, how far in front of or behind the measured surface it lies (recesses, set-backs, balconies, which an
+  outline cannot see).
 - `python -m tools.survey inspect` for element positions across all frames together.
 - Heimdal's plan and checks as usual (`agents/heimdal/SKILL.md`): a check is a number measured on the person's own
   frames.

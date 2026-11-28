@@ -6,6 +6,7 @@ python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
 python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]
 python -m tools.survey cameras --workdir DIR (--colmap DIR | --transforms FILE) --images DIR --align ALIGN.json [--n 12]
+python -m tools.survey depth --workdir DIR --source ID --depth-map FILE [--scale S] [--ray]
 python -m tools.survey shape --workdir DIR --source ID [--elements A,B] [--window u0,u1,v0,v1]
 python -m tools.survey plan begin --workdir DIR --request R [--model output.ifc]   (then check, then record)"""
 
@@ -61,6 +62,16 @@ def main(argv: list[str] | None = None) -> int:
     rec.add_argument("--frames", help="these image names instead (comma-separated)")
     rec.add_argument("--model", default="output.ifc")
     rec.add_argument("--title", default="reconstruction")
+    dep = sub.add_parser("depth", help="per element, how far the model lies in front of or behind a "
+                                       "reconstruction's depth map, through that frame's camera")
+    dep.add_argument("--workdir", default=".")
+    dep.add_argument("--source", required=True, help="a frame taken in with `cameras`")
+    dep.add_argument("--depth-map", required=True, help="COLMAP stereo/depth_maps/*.bin, or a .npy")
+    dep.add_argument("--model", default="output.ifc")
+    dep.add_argument("--camera-version", type=int)
+    dep.add_argument("--scale", type=float, help="metres per reconstruction unit (default: the camera's alignment)")
+    dep.add_argument("--ray", action="store_true", help="the map holds distances along each ray, not z")
+    dep.add_argument("--tol-mm", type=float, default=100.0)
     shp = sub.add_parser("shape", help="where the model's outline differs from a picture's, in mm, per height")
     shp.add_argument("--workdir", default=".")
     shp.add_argument("--source", required=True)
@@ -115,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         return _shape(args)
     if args.cmd == "cameras":
         return _cameras(args)
+    if args.cmd == "depth":
+        return _depth(args)
     if args.cmd == "measure":
         from .measure import main_measure
 
@@ -222,6 +235,23 @@ def _cameras(args) -> int:
     for f in r["frames"]:
         print(json.dumps(f))
     return 0 if r["alignment"]["gate"] == "passed" else 1
+
+
+def _depth(args) -> int:
+    """Prints the summary and the findings (the report is in survey/depth/). Exit 0 measured, 2 could not run."""
+    from .depth import run_depth
+
+    try:
+        r = run_depth(Path(args.workdir), args.source, args.depth_map, model_file=args.model,
+                      camera_version=args.camera_version, scale=args.scale, ray=args.ray, tol_mm=args.tol_mm)
+    except (ValueError, OSError) as e:
+        print(json.dumps({"error": str(e)}))
+        return 2
+    print(json.dumps({k: r[k] for k in ("source", "cameraVersion", "scale", "pixelsCompared", "medianMm", "absP90Mm",
+                                        "overlay")}))
+    for f in r["findings"][:12]:
+        print("-", f["text"])
+    return 0
 
 
 def _shape(args) -> int:
