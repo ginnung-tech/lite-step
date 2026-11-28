@@ -153,6 +153,24 @@ they know it was understood.
    (the distinct poses the points allow, ranked by outline, each with its overlay) in the `align` question;
    when they pick one, `python -m tools.survey answer --question Q --choice pose-k` freezes it. Pass
    `--topic` with `add` so the question names the issue it belongs to.
+4b. **A drawing is orthographic: fit it with `--view`, never with PnP.** An elevation, section or plan shows
+   one face at one scale, so the view is known and the points only give scale and offset. `--view south` is
+   the south face (looking north); `north`, `east`, `west`, `top` (plan, north up), or `dx,dy,dz`. Read the
+   scale off the drawing (its scale bar, or two datum ticks a known height apart) and pin it with
+   `--px-per-m`: then two points do (one height, one position), and the model's own size is not pulled into
+   the camera, which is what you are about to measure. Without it, three points or more. A sheet with several
+   figures (four elevations on one plate) is taken in one figure at a time with `--crop x0,y0,x1,y1`; the
+   crop's pixels are its own.
+
+   ```bash
+   python -m tools.survey add --workdir . --picture files/sheet15.png --crop 270,630,900,1160 \
+       --kind elevation --title "South elevation" --view south --px-per-m 5.47 \
+       --points survey/scripts/south-points.json
+   ```
+
+   The drawing's datums and the model's need not agree (a drawing's 0 is often a different ground): put the
+   points on what the request is about (the statue's base for the statue, not the ground), and say in the
+   point's `note` where each number came from.
 5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
 5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
    sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport
@@ -194,6 +212,31 @@ openings also reports `openings` and the round `openingsWeightedF1`: read those 
 behind a lattice face a photo is near-solid structure and the structure score cannot tell a lattice from
 solid bars. Spend detail where a source shows it: every element costs compile, tessellation and every
 round.
+
+**Shape: a sculpture, a vault, any freeform mesh.** A round measures where each element is (one shift per
+element); it says nothing about a mesh whose shape is wrong. Measure the outline instead, per fitted picture:
+
+```bash
+python -m tools.survey shape --workdir . --source south-elevation --window ,,46.9, [--elements statue]
+```
+
+It compares the picture's silhouette (a drawing's outline filled; a photo's not-sky) with the model's through
+the same camera and writes `survey/shape/{source}-v{camera}.json` and an overlay (grey: both; red: only the
+model; blue: only the picture). Per band of height it gives each side's edge error in millimetres; runs of
+bands off the same way are **findings**: side in world terms (east, north, ...), height range, mean and largest
+error, and the elements that make the model's edge there. `missing` and `extra` are whole heights one of them
+lacks. Read `iou` and `contour` (mean, p90, max mm) for the overall agreement; a check is one of these numbers
+on a named source. Two views at right angles (south and east elevations) place an error in 3D: the south one
+measures X at each height, the east one Y. Picture parts farther than 3 m from the model (lettering, the next
+figure on the sheet) and lines as wide as the picture (the frame, the ground) are left out and reported as
+`ignoredPictureM2`. `--window u0,u1,v0,v1` keeps a range (metres along the view's right and up; leave one empty
+to keep it open). A hole the outline encloses all round fills, as drapery does: measure it in a section.
+
+What to hand Gróa from it: the largest findings, as the elements, the side, the heights and the millimetres
+("the torch arm leans 5 m north of where the model holds it, from 75 to 92 m"), never "make it look more like the
+picture". The statue of liberty, 2026-11-28: from two HAER elevations, the model's torch arm stood straight up
+where the drawing leans it 5 m north, and the tablet side fell 2.2 m short over 16 m of height; the trial had
+compared its renders with the photos by eye and never saw either.
 
 ## Rules
 
