@@ -171,6 +171,13 @@ they know it was understood.
    The drawing's datums and the model's need not agree (a drawing's 0 is often a different ground): put the
    points on what the request is about (the statue's base for the statue, not the ground), and say in the
    point's `note` where each number came from.
+
+   **A drawing's title names a compass face of the site; `--view` names a face of the model.** They are the
+   same only when the model's axes are the site's. A monument modelled facing -Y that really faces south-east
+   is not: on the statue trial (2026-11-28) the sheet's "EAST ELEVATION" was `--view west` and its "WEST" was
+   `--view east`, and the wrong pair measured a 5 m lean that was not there. Decide each view from what the
+   figure shows (which side the arm, the door, the tablet is on) against the model's frame, not from its title,
+   and check it: `shape` on the view you chose and on its opposite; the right one has the clearly higher `iou`.
 5. A failed fit leaves an `align` question in `questions/`. Say so plainly; never pass a fit you made up.
 5b. **When the model is a first build from this very picture, measure it instead of fitting to it.** Its
    sizes are Gróa's guesses, so even correctly labelled points disagree and the fit can only fail (a carport
@@ -233,10 +240,18 @@ figure on the sheet) and lines as wide as the picture (the frame, the ground) ar
 to keep it open). A hole the outline encloses all round fills, as drapery does: measure it in a section.
 
 What to hand Gróa from it: the largest findings, as the elements, the side, the heights and the millimetres
-("the torch arm leans 5 m north of where the model holds it, from 75 to 92 m"), never "make it look more like the
-picture". The statue of liberty, 2026-11-28: from two HAER elevations, the model's torch arm stood straight up
-where the drawing leans it 5 m north, and the tablet side fell 2.2 m short over 16 m of height; the trial had
-compared its renders with the photos by eye and never saw either.
+("the robe falls 1.0 m short on the north side from 52 to 60 m"), never "make it look more like the picture".
+The statue of liberty, 2026-11-28: four HAER elevations at 1:384, scale pinned from the sheet's datum ticks,
+surfaced the drawing-versus-NPS height difference (44.93 m against 46.05 m) to settle first, a pedestal
+overhang, a brace showing through at the plinth, and a 2 degree forward lean of the statue; with those fixed all
+four views reached IoU 0.87-0.89 (mean contour 344-391 mm, about 2 px). At 183 mm per pixel that is the floor
+of what the sheet can say: a face or a hand is checked on a finer source, a section or a close photo.
+
+**When a scan of the real thing exists, start from it.** For heritage and sculpture, look for a scan or
+photogrammetry model (licence first: CC-BY-SA makes the delivered model CC-BY-SA too, and it must name its
+source), check what it is a scan OF (a statuette or maquette is not the statue: measure it with `shape`
+against the drawings before trusting it), align it, and measure it like any other version. Build the structure
+around it parametrically; only the freeform skin is mesh.
 
 ## Rules
 
