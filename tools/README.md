@@ -195,6 +195,21 @@ agreement is recorded with each overlay but does not fail a camera (a model that
 measured). Images must be the size the reconstruction solved and have square pixels (undistort first). Workflows:
 `agents/reconstruction/SKILL.md`. Tests: `test_tools_survey_recon.py`.
 
+### Depth: what an outline cannot see
+
+```bash
+python -m tools.survey depth --workdir . --source FRAME --depth-map recon/dense/stereo/depth_maps/f001.png.geometric.bin [--scale S] [--ray] [--tol-mm 100]
+```
+
+For a frame taken in with `cameras`: the model's depth through its camera against the reconstruction's depth map
+(COLMAP's `*.bin`, or a `.npy`), scaled to metres by the camera's alignment (or `--scale`), along the camera's axis
+(COLMAP's convention) or along each ray (`--ray`). Per element it reports the median error over its pixels:
+positive behind the measured surface, negative in front of it. An element whose median is beyond the tolerance is a
+finding ("`slab:balcony` lies 505 mm in front of the surface the reconstruction measured"); a part that is right or a
+few noisy pixels cannot make or hide one. Writes `survey/depth/{source}-v{camera}.json` and an overlay (red in front,
+blue behind, grey within tolerance). Recesses, set-backs, courtyards and balconies sit inside an outline and need
+this. Tests: `test_tools_survey_depth.py`.
+
 ### Shape: a freeform mesh against a picture's outline
 
 ```bash

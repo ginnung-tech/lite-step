@@ -246,6 +246,10 @@ figure on the sheet) and lines as wide as the picture (the frame, the ground) ar
 `ignoredPictureM2`. `--window u0,u1,v0,v1` keeps a range (metres along the view's right and up; leave one empty
 to keep it open). A hole the outline encloses all round fills, as drapery does: measure it in a section.
 
+**Depth, for a frame from a reconstruction.** An outline cannot see a recess, a set-back or a balcony that sticks
+out too far. With the reconstruction's depth map for a frame taken in by `cameras`, `python -m tools.survey depth
+--source FRAME --depth-map FILE` gives per element the median distance in front of or behind the measured surface.
+
 What to hand Gróa from it: the largest findings, as the elements, the side, the heights and the millimetres
 ("the robe falls 1.0 m short on the north side from 52 to 60 m"), never "make it look more like the picture".
 The statue of liberty, 2026-11-28: four HAER elevations at 1:384, scale pinned from the sheet's datum ticks,
