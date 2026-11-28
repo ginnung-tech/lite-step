@@ -167,6 +167,35 @@ openings (class 5, sky seen through the structure; rounds score them as `opening
 size and sha256): last, after the files are kept. Heimdal's instructions: `agents/heimdal/SKILL.md`.
 Tests: `test_tools_survey_intake.py`.
 
+A drawing (`elevation`, `section`, `plan`, `detail_plane`) is fitted **orthographic** with `--view` (`south` is
+the south face, looking north; `north`, `east`, `west`, `top`, or `dx,dy,dz`): three control points, or two
+with the drawing's scale pinned by `--px-per-m` (read off its scale bar or two datum ticks). Points are checked
+against each other by leaving each out. `--crop x0,y0,x1,y1` takes in one figure of a sheet that holds several,
+as a picture of its own (`survey/crops/`).
+
+```bash
+python -m tools.survey add --workdir . --picture sheet.png --crop 270,630,900,1160 --kind elevation \
+    --title "South elevation" --view south --px-per-m 5.47 --points south-points.json
+```
+
+### Shape: a freeform mesh against a picture's outline
+
+```bash
+python -m tools.survey shape --workdir . --source ID [--elements statue] [--window u0,u1,v0,v1] [--band-m 0.25] [--tol-mm 100]
+```
+
+The minions measure where an element is; a sculpture is one element whose shape is wrong. `shape` compares
+outlines through a source's passed camera: the picture's silhouette (a drawing's ink grown by `--close-m`,
+flooded from the border, shrunk back, so its edge stays where it is drawn; a photo's not-sky) against the
+drone's (only `--elements`, by canonical-name suffix, and their parts, when given). Per band of height it
+writes each side's edge error in millimetres; runs off the same way become findings with the side in world
+terms, the height range, the mean and largest error and the elements at the model's edge there; `missing` and
+`extra` are heights one of them lacks entirely. Overall: `iou` and `contour` (mean, p90, max mm). Picture parts
+more than 3 m from the model and lines as wide as the picture are left out and reported (`ignoredPictureM2`).
+Writes `survey/shape/{source}-v{camera}.json` and an overlay (grey both, red only the model, blue only the
+picture). Exact millimetres through an orthographic camera; through a perspective one, at the model's median
+depth (`scaleNote`). Tests: `test_tools_survey_shape.py`.
+
 ### Inspecting: a round of minions
 
 ```bash

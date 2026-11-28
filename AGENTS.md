@@ -163,4 +163,10 @@ for the person; `converged` needs a passed check measured on the person's own pi
 The traps: a picture that is not lined up measures nothing (ask, do not converge); "left to right" in a photo
 is not an axis until its camera is fitted; counts and sizes come from geometry, never from looking.
 
+**Building something from pictures of it is a Heimdal job from the first round, not after.** A sculpture, a
+vault, a facade: take the pictures in, fit them (drawings with `--view`), and measure each version with
+`python -m tools.survey shape`, which gives the outline's error per height and side in millimetres and the
+elements at fault. Comparing your own renders with the photos by eye does not converge: a statue built that way
+held its torch arm 5 m from where the drawings put it, and nothing said so.
+
 MIT licensed.

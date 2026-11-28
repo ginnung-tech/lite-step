@@ -5,6 +5,7 @@ python -m tools.survey partials --workdir DIR --source ID --parts PARTS.json
 python -m tools.survey ink --workdir DIR --source ID
 python -m tools.survey answer --workdir DIR --question QID --choice POSE_ID
 python -m tools.survey measure --workdir DIR --script output.py --picture PTS.json:W:H [--picture ...] --fix KEY [--keep-all] [--write OUT.py]
+python -m tools.survey shape --workdir DIR --source ID [--elements A,B] [--window u0,u1,v0,v1]
 python -m tools.survey plan begin --workdir DIR --request R [--model output.ifc]   (then check, then record)"""
 
 from __future__ import annotations
@@ -42,6 +43,22 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("--model", default="output.ifc", help="the model to fit against (relative to the workdir)")
     add.add_argument("--illustrative", action="store_true")
     add.add_argument("--topic", help="the issue (BCF topic guid) the picture came with: its question names it")
+    add.add_argument("--view", help="a drawing's view: south (the south face, looking north), north, east, west, "
+                                    "top, or dx,dy,dz; fits an orthographic camera")
+    add.add_argument("--crop", help="x0,y0,x1,y1: take in one figure of a sheet that holds several")
+    add.add_argument("--px-per-m", type=float, help="a drawing's scale read off its scale bar: pins the scale")
+    shp = sub.add_parser("shape", help="where the model's outline differs from a picture's, in mm, per height")
+    shp.add_argument("--workdir", default=".")
+    shp.add_argument("--source", required=True)
+    shp.add_argument("--model", default="output.ifc")
+    shp.add_argument("--camera-version", type=int)
+    shp.add_argument("--elements", help="comma-separated canonical-name suffixes: measure only these (and parts)")
+    shp.add_argument("--window", help="u0,u1,v0,v1 in metres along the view's right and up (ortho); leave one "
+                                      "empty to keep it open, e.g. ,,43.5, for everything above 43.5 m")
+    shp.add_argument("--band-m", type=float, default=0.25)
+    shp.add_argument("--tol-mm", type=float, default=100.0)
+    shp.add_argument("--threshold", type=int, default=200, help="a drawing's ink: darker than this")
+    shp.add_argument("--close-m", type=float, default=0.3, help="gaps in a drawing's outline up to this close")
     ans = sub.add_parser("answer", help="the person picked a candidate pose: freeze it")
     ans.add_argument("--workdir", default=".")
     ans.add_argument("--question", required=True)
@@ -80,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         return _add(args)
     if args.cmd == "plan":
         return _plan(args)
+    if args.cmd == "shape":
+        return _shape(args)
     if args.cmd == "measure":
         from .measure import main_measure
 
@@ -160,6 +179,34 @@ def _plan(args) -> int:
         return 2
 
 
+def _shape(args) -> int:
+    """Prints the findings (the full report is in survey/shape/). Exit 0 measured, 2 could not run."""
+    from .shape import Window, run_shape
+
+    win = None
+    if args.window:
+        parts = (args.window.split(",") + ["", "", "", ""])[:4]
+        try:
+            win = Window(*[float(p) if p.strip() else None for p in parts])
+        except ValueError:
+            print(json.dumps({"error": f"--window {args.window!r}: four numbers u0,u1,v0,v1 (any may be empty)"}))
+            return 2
+    try:
+        r = run_shape(Path(args.workdir), args.source, model_file=args.model, camera_version=args.camera_version,
+                      elements=[s.strip() for s in args.elements.split(",")] if args.elements else None, window=win,
+                      band_m=args.band_m, tol_mm=args.tol_mm, threshold=args.threshold, close_m=args.close_m)
+    except (ValueError, OSError) as e:
+        print(json.dumps({"error": str(e)}))
+        return 2
+    print(json.dumps({k: r[k] for k in ("source", "cameraVersion", "iou", "contour", "pictureM2", "modelM2",
+                                        "toleranceMm", "overlay")}, ensure_ascii=False))
+    for f in r["findings"][:12]:
+        print("-", f["text"])
+    if len(r["findings"]) > 12:
+        print(f"- ... {len(r['findings']) - 12} more in survey/shape/{args.source}-v{r['cameraVersion']}.json")
+    return 0
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -174,7 +221,14 @@ def _add(args) -> int:
     now = _now()
     try:
         picture = confined(wd, args.picture)
-        cam = _viewer_camera(confined(wd, args.bcfv), picture) if args.bcfv else None
+        if args.crop:
+            from .intake import crop_picture
+
+            box = [int(v) for v in args.crop.split(",")]
+            if len(box) != 4:
+                raise ValueError(f"--crop {args.crop!r}: four integers x0,y0,x1,y1")
+            picture = crop_picture(wd, picture, box)
+        cam =_viewer_camera(confined(wd, args.bcfv), picture) if args.bcfv else None
         src = add_source(wd, picture, kind=args.kind, title=args.title, now=now, convention=args.convention,
                          origin=args.origin, added_by=args.by, source_id=args.source_id, viewer_camera=cam,
                          illustrative=args.illustrative)
@@ -216,6 +270,11 @@ def _fit(wd: Path, src: dict, args, now: str) -> dict:
     if src["kind"] == "viewer_screenshot":
         return fit_viewer(wd, src["id"], scene, now=now, topic=args.topic)
     pts = json.loads(confined(wd, args.points).read_text(encoding="utf-8"))
+    if args.view:
+        from .intake import fit_points_ortho
+
+        return fit_points_ortho(wd, src["id"], pts, view=args.view, now=now, scene=scene,
+                                px_per_m=args.px_per_m, topic=args.topic)
     return fit_points(wd, src["id"], pts, now=now, scene=scene, topic=args.topic)
 
 

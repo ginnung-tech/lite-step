@@ -241,6 +241,121 @@ def _source(workdir: Path, source_id: str) -> dict:
 # --- fits ----------------------------------------------------------------------------------------------
 
 
+#: drawings are orthographic: an elevation, a section, a plan is fitted with an OrthoCamera, never PnP
+DRAWING_KINDS = ("elevation", "section", "plan", "detail_plane")
+#: a named view is the face it shows: the SOUTH elevation is the south face, seen by looking north (+Y)
+VIEWS: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {
+    "south": ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), "north": ((0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    "east": ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)), "west": ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "top": ((0.0, 0.0, -1.0), (0.0, 1.0, 0.0)),
+}
+
+
+def parse_view(view: str) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """`south` (the south face, looking north), `north`, `east`, `west`, `top` (plan, north up), or a direction
+    `dx,dy,dz` looking at the model with Z up."""
+    if view in VIEWS:
+        return VIEWS[view]
+    try:
+        d = tuple(float(v) for v in view.split(","))
+    except ValueError:
+        d = ()
+    if len(d) != 3 or not any(d):
+        raise IntakeError(f"view {view!r}: one of {', '.join(VIEWS)}, or a direction dx,dy,dz")
+    return d, (0.0, 0.0, 1.0)  # type: ignore[return-value]
+
+
+def crop_picture(workdir: str | Path, picture: Path, box: list[int]) -> Path:
+    """One figure of a sheet that holds several (four elevations on one plate): the crop as a picture of its own,
+    written beside the survey so `add_source` takes it in like any other. Pixels of the crop are its own."""
+    import cv2
+
+    img = _read_image(picture)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = (int(v) for v in box)
+    if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+        raise IntakeError(f"crop {box} is not inside the {w}x{h} picture")
+    out = confined(survey_dir(workdir), f"crops/{_slug(picture.name)}-{x0}-{y0}-{x1}-{y1}.png")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(out), img[y0:y1, x0:x1]):
+        raise IntakeError(f"could not write the crop of {picture.name}")
+    return out
+
+
+def fit_points_ortho(workdir: str | Path, source_id: str, points: list[dict], *, view: str, now: str, scene=None,
+                     px_per_m: float | None = None, gate_px: float = POINTS_GATE_PX, topic: str | None = None) -> dict:
+    """Fit an orthographic camera to a drawing from control points `[{"px", "world", "by"?, "note"?}]`.
+
+    A drawing has no perspective: the view (which face it shows) is known, and the points give scale and offset.
+    Three points at least, spread in both directions, so the residual means something; two with `px_per_m` (read
+    off the drawing's scale bar), which pins the scale for both axes. A point the others put more than
+    `DISAGREE_PX` away is named in the reason: its label is the likely error."""
+    from .fit import fit_ortho
+
+    wd = Path(workdir)
+    src = _source(wd, source_id)
+    if src["kind"] not in DRAWING_KINDS:
+        raise IntakeError(f"{source_id} is a {src['kind']}: an orthographic fit is for {', '.join(DRAWING_KINDS)}")
+    need = 2 if px_per_m else 3
+    if len(points) < need:
+        raise IntakeError(f"an orthographic fit needs {need} control points or more"
+                          + ("" if px_per_m else " (or two and the drawing's scale, --px-per-m)"))
+    img = _read_image(confined(survey_dir(wd), src["file"]))
+    h, w = img.shape[:2]
+    direction, up = parse_view(view)
+    world = np.array([p["world"] for p in points], dtype=np.float64)
+    px = np.array([p["px"] for p in points], dtype=np.float64)
+    f = fit_ortho(world, px, direction, up, w, h, px_per_m=px_per_m, k=1.0 if px_per_m else None)
+    cam = f.camera
+    # Leave each point out in turn and fit the rest: the point whose removal leaves the others consistent, and that
+    # their camera puts far from where it was clicked, is the doubt. Its error alone spreads over every point
+    # while it is in, so the worst residual does not name it.
+    worst, doubt = 0, False
+    if len(points) >= (3 if px_per_m else 4):
+        trials = []
+        for i in range(len(points)):
+            keep = [j for j in range(len(points)) if j != i]
+            try:
+                g = fit_ortho(world[keep], px[keep], direction, up, w, h, px_per_m=px_per_m,
+                              k=1.0 if px_per_m else None)
+            except ValueError:
+                continue
+            err = float(np.hypot(*(g.camera.project(world[i:i + 1])[0] - px[i])))
+            trials.append((g.residual_px, err, i))
+        if trials:
+            rest, err, worst = min(trials)
+            doubt = rest <= gate_px and err > DISAGREE_PX and f.residual_px > gate_px
+    hit = None
+    if scene is not None:
+        from .drone import Drone
+
+        hit = Drone(scene).render(cam).hit
+    cams = _read(survey_dir(wd) / CAMERAS, "cameras")
+    version = _next_version(cams, source_id)
+    passed = f.residual_px <= gate_px and not doubt
+    if doubt:
+        reason = (f"control point {worst + 1} disagrees with the others: fitted without it, the camera puts it "
+                  f"{err:.0f} px away. Its label (which point on the model) is the likely error.")
+    else:
+        reason = (f"{len(points)} control points, orthographic ({view}); mean {f.residual_px:.1f} px, "
+                  f"{cam.px_per_m:.2f} px/m" + (f", stretch k={cam.k:.3f}" if not px_per_m else ", scale pinned"))
+    entry: dict[str, Any] = {
+        "source": source_id, "version": version, "camera": cam.to_contract(), "method": "control_points",
+        "controlPoints": [{"px": [float(v) for v in p["px"]], "world": [float(v) for v in p["world"]],
+                           "by": p.get("by", "heimdal"), **({"note": p["note"][:300]} if p.get("note") else {})}
+                          for p in points],
+        "residualMm": round(f.residual_px / cam.px_per_m * 1000.0, 1), "gate": "passed" if passed else "failed",
+        "frozenAt": now, "reason": reason[:500],
+        "overlay": _save_overlay(wd, source_id, version, img, hit, list(zip(px, cam.project(world)))),
+    }
+    _record(wd, entry)
+    if not passed:
+        ask_align(wd, source_id, now=now, points=2, topic=topic, question=(
+            "I could not line this drawing up with the model. Please click two points on it whose height and "
+            "position you know (a datum, a corner), then the same points on the model."))
+    return _result(src, entry)
+
+
 def _model_outline(hit: np.ndarray) -> np.ndarray:
     import cv2
 
